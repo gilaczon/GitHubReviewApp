@@ -27,6 +27,11 @@ public class ReviewProcessor
             "Processing review for {Owner}/{Repo}#{PrNumber}.",
             message.Owner, message.Repo, message.PrNumber);
 
+        // Azure Functions injects an invocation span as Activity.Current before the function
+        // body runs. That span lives in the Functions host and is never exported to Uptrace,
+        // making our spans orphans that never appear in the Traces view. Clear it so our span
+        // becomes a proper root with its own trace ID.
+        Activity.Current = null;
         using var activity = ActivitySources.ReviewProcessor.StartActivity(
             "ReviewProcessor.RunAsync", ActivityKind.Consumer);
 

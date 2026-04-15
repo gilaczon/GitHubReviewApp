@@ -27,36 +27,14 @@ var host = new HostBuilder()
         else
             services.AddHttpClient<IClaudeService, ClaudeService>();
 
-        // OpenTelemetry tracing + metrics → Uptrace
+        // OpenTelemetry tracing + metrics + logs → Uptrace
         services.AddUptraceTelemetry(context.Configuration);
-    })
-    // ConfigureLogging runs after ConfigureServices (registration order), so Key Vault secrets
-    // are already loaded into context.Configuration by the time this callback executes.
-    .ConfigureLogging((context, logging) =>
-    {
-        var uptraceDsn = context.Configuration["UptraceDsn"];
-        logging.AddOpenTelemetry(options =>
-        {
-            options.IncludeFormattedMessage = true;
-            options.IncludeScopes = true;
-            if (!string.IsNullOrWhiteSpace(uptraceDsn))
-            {
-                options.AddOtlpExporter(otlp =>
-                {
-                    otlp.Endpoint = new Uri("https://otlp.uptrace.dev");
-                    otlp.Protocol = OtlpExportProtocol.HttpProtobuf;
-                    otlp.Headers  = $"uptrace-dsn={uptraceDsn}";
-                });
-            }
-        });
     })
     .Build();
 
-// Diagnostic: confirm whether Uptrace DSN is configured before starting
 var startupLogger = host.Services.GetRequiredService<ILogger<Program>>();
-var uptraceDsnCheck = host.Services.GetRequiredService<IConfiguration>()["UptraceDsn"];
 startupLogger.LogInformation(
     "Uptrace DSN configured: {IsConfigured}",
-    !string.IsNullOrWhiteSpace(uptraceDsnCheck));
+    !string.IsNullOrWhiteSpace(host.Services.GetRequiredService<IConfiguration>()["UptraceDsn"]));
 
 host.Run();
