@@ -19,6 +19,9 @@ audit/
 actions-yaml/
 azure-setup.md
 
+# Private keys
+*.pem
+
 # OS artifacts
 .DS_Store
 Thumbs.db

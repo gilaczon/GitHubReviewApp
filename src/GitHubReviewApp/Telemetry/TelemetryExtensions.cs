@@ -34,18 +34,6 @@ internal static class TelemetryExtensions
                     });
                 }
             })
-            .WithLogging(logging =>
-            {
-                if (!string.IsNullOrWhiteSpace(uptraceDsn))
-                {
-                    logging.AddOtlpExporter(otlp =>
-                    {
-                        otlp.Endpoint = new Uri("https://otlp.uptrace.dev");
-                        otlp.Protocol = OtlpExportProtocol.HttpProtobuf;
-                        otlp.Headers  = $"uptrace-dsn={uptraceDsn}";
-                    });
-                }
-            })
             .WithMetrics(metrics =>
             {
                 metrics

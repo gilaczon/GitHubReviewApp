@@ -45,6 +45,8 @@ public class GitHubService : IGitHubService
     public async Task PostReviewAsync(
         string owner, string repo, int prNumber, string body, string token)
     {
+        await DeletePendingReviewAsync(owner, repo, prNumber, token);
+
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"/repos/{owner}/{repo}/pulls/{prNumber}/reviews");
@@ -55,13 +57,60 @@ public class GitHubService : IGitHubService
         var payload = JsonSerializer.Serialize(new
         {
             body,
-            event_type = "COMMENT"   // COMMENT = non-blocking; use REQUEST_CHANGES if you want blocking
+            @event = "COMMENT"   // COMMENT = non-blocking; use REQUEST_CHANGES if you want blocking
         });
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 
         var response = await _httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync();
+            throw new HttpRequestException(
+                $"GitHub POST reviews failed {(int)response.StatusCode} ({response.ReasonPhrase}): {errorBody}");
+        }
 
         _logger.LogInformation("Posted review to {Owner}/{Repo}#{PrNumber}.", owner, repo, prNumber);
+    }
+
+    // GitHub allows only one pending (draft) review per reviewer per PR.
+    // Any earlier run that crashed before submitting leaves a dangling draft that blocks future reviews.
+    private async Task DeletePendingReviewAsync(string owner, string repo, int prNumber, string token)
+    {
+        using var listRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/repos/{owner}/{repo}/pulls/{prNumber}/reviews");
+
+        listRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        listRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
+
+        var listResponse = await _httpClient.SendAsync(listRequest);
+        if (!listResponse.IsSuccessStatusCode) return;
+
+        var reviews = await listResponse.Content.ReadFromJsonAsync<PullRequestReview[]>();
+        var pending = reviews?.FirstOrDefault(r => r.State == "PENDING");
+        if (pending is null) return;
+
+        _logger.LogInformation(
+            "Deleting pending review {ReviewId} before posting new review for {Owner}/{Repo}#{PrNumber}.",
+            pending.Id, owner, repo, prNumber);
+
+        using var deleteRequest = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"/repos/{owner}/{repo}/pulls/{prNumber}/reviews/{pending.Id}");
+
+        deleteRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        deleteRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
+
+        await _httpClient.SendAsync(deleteRequest);
+    }
+
+    private sealed class PullRequestReview
+    {
+        [JsonPropertyName("id")]
+        public long Id { get; init; }
+
+        [JsonPropertyName("state")]
+        public string State { get; init; } = string.Empty;
     }
 }

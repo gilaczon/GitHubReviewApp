@@ -71,11 +71,14 @@ public class GitHubAppAuthService : IGitHubAppAuthService
     {
         _logger.LogInformation("Exchanging JWT for installation {InstallationId} access token.", installationId);
 
-        var client = _httpClientFactory.CreateClient("github");
+        var client = _httpClientFactory.CreateClient();
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"https://api.github.com/app/installations/{installationId}/access_tokens");
 
+        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("GitHubReviewApp", "1.0"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
         request.Headers.Add("Authorization", $"Bearer {jwt}");
 
         var response = await client.SendAsync(request);
