@@ -1,0 +1,27 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio IDE state
+.vs/
+
+# Claude Code session state
+.claude/settings.local.json
+
+# Azure Functions local settings (secrets, connection strings)
+**/local.settings.json
+
+# TopSecret local secret overrides
+**/appsettings.localsecrets.json
+
+# Local working folders
+audit/
+actions-yaml/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+*.snupkg
