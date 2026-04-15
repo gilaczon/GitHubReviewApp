@@ -17,6 +17,7 @@ obj/
 # Local working folders
 audit/
 actions-yaml/
+azure-setup.md
 
 # OS artifacts
 .DS_Store
