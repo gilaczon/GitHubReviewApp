@@ -1,0 +1,30 @@
+{
+  "url": "https://api.github.com/repos/microsoft/vscode/pulls/346019",
+  "id": 5152664538,
+  "number": 346019,
+  "state": "closed",
+  "locked": false,
+  "title": "Copilot - bump node types so that they are consistent with the rest of the repository",
+  "draft": false,
+  "merged": true,
+  "mergeable_state": "unknown",
+  "author_association": "MEMBER",
+  "commits": 1,
+  "additions": 78,
+  "deletions": 80,
+  "changed_files": 9,
+  "comments": 1,
+  "review_comments": 0,
+  "created_at": "2026-11-04T10:20:53Z",
+  "updated_at": "2026-11-04T10:44:36Z",
+  "closed_at": "2026-11-04T10:43:05Z",
+  "merged_at": "2026-11-04T10:43:05Z",
+  "head": {
+    "ref": "feature-branch",
+    "sha": "b434f850ab7e8a4fbe02fdb4925d5f86b8486d1d"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "abb54349981451cd344fc1dd7a4299f7bcf0152e"
+  }
+}

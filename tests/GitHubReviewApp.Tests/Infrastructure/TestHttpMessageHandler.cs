@@ -9,12 +9,6 @@ internal sealed class TestHttpMessageHandler : HttpMessageHandler
 {
     private readonly Func<HttpRequestMessage, Task<HttpResponseMessage>> _handler;
 
-    /// <summary>The most recent request sent through this handler.</summary>
-    public HttpRequestMessage? LastRequest { get; private set; }
-
-    /// <summary>All requests sent through this handler in chronological order.</summary>
-    public List<HttpRequestMessage> Requests { get; } = new();
-
     /// <summary>Creates a handler with a synchronous response factory.</summary>
     public TestHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
         : this(req => Task.FromResult(handler(req)))
@@ -39,9 +33,18 @@ internal sealed class TestHttpMessageHandler : HttpMessageHandler
     {
     }
 
+    /// <summary>The most recent request sent through this handler.</summary>
+    public HttpRequestMessage? LastRequest { get; private set; }
+
+    /// <summary>All requests sent through this handler in chronological order.</summary>
+    public List<HttpRequestMessage> Requests { get; } = new();
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        // A real handler stops when the caller cancels; tests that rely on cancellation need the same.
+        cancellationToken.ThrowIfCancellationRequested();
+
         LastRequest = request;
         Requests.Add(request);
         return await _handler(request);

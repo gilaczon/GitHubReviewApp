@@ -14,6 +14,20 @@ internal static class RsaKeyHelper
     /// <summary>Corresponding RSA public key for verifying JWT signatures in tests.</summary>
     public static RSA PublicKey => _lazyKey.Value.PublicKey;
 
+    /// <summary>
+    /// A fresh key pair whose private key is PKCS#1 ("BEGIN RSA PRIVATE KEY"), the format of the .pem file GitHub hands out for an app,
+    /// with the given line ending (a file saved on Windows has CRLF).
+    /// </summary>
+    public static (string Pem, RSA PublicKey) CreatePkcs1KeyPair(string lineEnding = "\n")
+    {
+        using var rsa = RSA.Create(2048);
+
+        var publicKeyOnly = RSA.Create();
+        publicKeyOnly.ImportRSAPublicKey(rsa.ExportRSAPublicKey(), out _);
+
+        return (rsa.ExportRSAPrivateKeyPem().ReplaceLineEndings(lineEnding), publicKeyOnly);
+    }
+
     private static (string Pem, RSA PublicKey) GenerateKey()
     {
         using var rsa = RSA.Create(2048);

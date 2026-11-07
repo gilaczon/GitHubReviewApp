@@ -1,0 +1,125 @@
+namespace GitHubReviewApp.Telemetry;
+
+internal static class AppMeters
+{
+    internal const string MeterName = "GitHubReviewApp";
+
+    private static readonly Meter _meter = new(MeterName);
+
+    internal static readonly Counter<long> InputTokens =
+        _meter.CreateCounter<long>(
+            "gen_ai.usage.input_tokens",
+            unit: "tokens",
+            description: "Total input tokens consumed by Claude API calls");
+
+    internal static readonly Counter<long> OutputTokens =
+        _meter.CreateCounter<long>(
+            "gen_ai.usage.output_tokens",
+            unit: "tokens",
+            description: "Total output tokens consumed by Claude API calls");
+
+    internal static readonly Counter<long> CacheReadInputTokens =
+        _meter.CreateCounter<long>(
+            "gen_ai.usage.cache_read_input_tokens",
+            unit: "tokens",
+            description: "Input tokens served from the prompt cache");
+
+    internal static readonly Counter<long> CacheCreationInputTokens =
+        _meter.CreateCounter<long>(
+            "gen_ai.usage.cache_creation_input_tokens",
+            unit: "tokens",
+            description: "Input tokens written to the prompt cache");
+
+    /// <summary>
+    /// Tagged <c>coverage</c>: full, partial (something readable was not read) or none (a review was posted but not one file was reviewed,
+    /// which an operator should treat as a failure of the model rather than a success).
+    /// </summary>
+    internal static readonly Counter<long> ReviewsProcessed =
+        _meter.CreateCounter<long>(
+            "github_review_app.reviews.processed",
+            unit: "reviews",
+            description: "Number of reviews posted");
+
+    /// <summary>Failed attempts. Tagged <c>kind</c> = transient (will be retried), permanent (gave up) or exhausted (the retries ran out).</summary>
+    internal static readonly Counter<long> ReviewsFailed =
+        _meter.CreateCounter<long>(
+            "github_review_app.reviews.failed",
+            unit: "reviews",
+            description: "Number of review processing failures");
+
+    internal static readonly Counter<long> ReviewsInterrupted =
+        _meter.CreateCounter<long>(
+            "github_review_app.reviews.interrupted",
+            unit: "reviews",
+            description: "Attempts cut short because the host was shutting down; the message returns to the queue");
+
+    /// <summary>
+    /// Attempts to tell the author that a review failed which themselves failed. Tagged <c>outcome</c>: refused (GitHub will not accept it, so the author
+    /// is not told) or retry (a failure that can clear up; the message comes back, so one author can be counted again, and if the outage lasts the
+    /// message ends in a queue nobody reads).
+    /// </summary>
+    internal static readonly Counter<long> FailureNoticesFailed =
+        _meter.CreateCounter<long>(
+            "github_review_app.failure_notices.failed",
+            unit: "notices",
+            description: "Attempts to post a failure notice to the pull request author that failed");
+
+    /// <summary>Tagged <c>outcome</c> with the <see cref="Models.ChunkOutcome"/> name. Counts every request, retried or discarded runs included.</summary>
+    internal static readonly Counter<long> ChunkRequests =
+        _meter.CreateCounter<long>(
+            "github_review_app.chunks",
+            unit: "requests",
+            description: "Model requests, by how they ended");
+
+    /// <summary>Tagged <c>reason</c> with the <see cref="Models.ReviewSkipReason"/> name.</summary>
+    internal static readonly Counter<long> ReviewsSkipped =
+        _meter.CreateCounter<long>(
+            "github_review_app.reviews.skipped",
+            unit: "reviews",
+            description: "Number of queued reviews that were skipped without calling the model");
+
+    internal static readonly Counter<long> ReviewsPartial =
+        _meter.CreateCounter<long>(
+            "github_review_app.reviews.partial",
+            unit: "reviews",
+            description: "Reviews posted without covering every changed file");
+
+    internal static readonly Counter<long> FilesReviewed =
+        _meter.CreateCounter<long>(
+            "github_review_app.files.reviewed",
+            unit: "files",
+            description: "Changed files sent to the model");
+
+    /// <summary>Tagged <c>reason</c> with the <see cref="Models.FileSkipReason"/> name.</summary>
+    internal static readonly Counter<long> FilesSkipped =
+        _meter.CreateCounter<long>(
+            "github_review_app.files.skipped",
+            unit: "files",
+            description: "Changed files left out of the review");
+
+    /// <summary>Tagged <c>severity</c>.</summary>
+    internal static readonly Counter<long> FindingsReported =
+        _meter.CreateCounter<long>(
+            "github_review_app.findings",
+            unit: "findings",
+            description: "Findings reported in posted reviews");
+
+    // A review takes from a few seconds (nothing to read) to about twenty minutes (the limit of one review), and the OpenTelemetry default buckets
+    // stop at ten seconds, so without these every review of any size would land in the overflow bucket and no percentile would mean anything.
+    private static readonly double[] _reviewDurationBucketsMilliseconds =
+        [5_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_200_000, 1_800_000];
+
+    /// <summary>Tagged <c>outcome</c>: posted, skipped, retry (a transient failure), failed or interrupted.</summary>
+    internal static readonly Histogram<double> ReviewDuration =
+        _meter.CreateHistogram<double>(
+            "github_review_app.review.duration",
+            unit: "ms",
+            description: "End-to-end review processing duration in milliseconds",
+            advice: new InstrumentAdvice<double> { HistogramBucketBoundaries = _reviewDurationBucketsMilliseconds });
+
+    internal static readonly Histogram<long> PullRequestChangedLines =
+        _meter.CreateHistogram<long>(
+            "github_review_app.pull_request.changed_lines",
+            unit: "lines",
+            description: "Lines changed (added plus deleted) in reviewed pull requests");
+}

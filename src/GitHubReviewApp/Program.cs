@@ -15,26 +15,22 @@ var host = new HostBuilder()
         ConfigurationManager? configManager = context.Properties["AppConfigurationManager"] as ConfigurationManager;
         configManager!.AddSecretsToConfiguration(services, context.HostingEnvironment.EnvironmentName);
 
-        // TimeProvider — injectable seam that enables testable time-dependent logic
-        services.AddSingleton(TimeProvider.System);
-
-        services.AddSingleton<IGitHubAppAuthService, GitHubAppAuthService>();
-
-        // Typed HTTP clients registered against interfaces
-        services.AddHttpClient<IGitHubService, GitHubService>();
-        if (context.HostingEnvironment.IsDevelopment())
-            services.AddSingleton<IClaudeService, MockClaudeService>();
-        else
-            services.AddHttpClient<IClaudeService, ClaudeService>();
+        // Settings, GitHub and Claude clients, and the review pipeline. Development uses a fake model.
+        services.AddReviewPipeline(context.Configuration, isClaudeMocked: context.HostingEnvironment.IsDevelopment());
 
         // OpenTelemetry tracing + metrics + logs → Uptrace
         services.AddUptraceTelemetry(context.Configuration);
     })
     .Build();
 
-var startupLogger = host.Services.GetRequiredService<ILogger<Program>>();
-startupLogger.LogInformation(
-    "Uptrace DSN configured: {IsConfigured}",
-    !string.IsNullOrWhiteSpace(host.Services.GetRequiredService<IConfiguration>()["UptraceDsn"]));
+StartupDiagnostics.LogTelemetryState(
+    host.Services.GetRequiredService<ILogger<Program>>(),
+    host.Services.GetRequiredService<IConfiguration>(),
+    host.Services.GetRequiredService<IHostEnvironment>());
+
+StartupDiagnostics.LogAuthorAllowList(
+    host.Services.GetRequiredService<ILogger<Program>>(),
+    host.Services.GetRequiredService<IOptions<ReviewOptions>>().Value,
+    host.Services.GetRequiredService<IHostEnvironment>());
 
 host.Run();

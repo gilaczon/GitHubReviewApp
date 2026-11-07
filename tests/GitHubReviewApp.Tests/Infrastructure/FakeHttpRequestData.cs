@@ -29,9 +29,7 @@ internal sealed class FakeHttpRequestData : HttpRequestData
 
     public override HttpResponseData CreateResponse()
     {
-        var responseMock = new Mock<HttpResponseData>(FunctionContext);
-        responseMock.Setup(x => x.Headers).Returns(new HttpHeadersCollection());
-        return responseMock.Object;
+        return new FakeHttpResponseData(FunctionContext);
     }
 
     /// <summary>Adds a header value to the fake request.</summary>
@@ -54,6 +52,29 @@ internal sealed class FakeHttpRequestData : HttpRequestData
         var request = new FakeHttpRequestData(context, stream);
         foreach (var (name, value) in headers)
             request._headers.Add(name, value);
+        return request;
+    }
+
+    /// <summary>A request whose body is exactly these bytes, which a test needs when the signature must cover bytes a string cannot carry (a BOM, invalid UTF-8).</summary>
+    public static FakeHttpRequestData CreateFromBytes(
+        byte[] body,
+        params (string Name, string Value)[] headers)
+    {
+        return CreateFromStream(new MemoryStream(body), headers);
+    }
+
+    /// <summary>A request that reads its body from the given stream.</summary>
+    public static FakeHttpRequestData CreateFromStream(
+        Stream body,
+        params (string Name, string Value)[] headers)
+    {
+        var request = new FakeHttpRequestData(CreateFunctionContext(), body);
+
+        foreach (var (name, value) in headers)
+        {
+            request._headers.Add(name, value);
+        }
+
         return request;
     }
 

@@ -1,61 +1,20 @@
 namespace GitHubReviewApp.Models;
 
+/// <summary>
+/// The parts of a GitHub pull_request webhook this app reads. Every object is nullable on purpose: System.Text.Json assigns a JSON null over a
+/// property initializer, so "= new()" would not stop a payload with an explicit null from crashing the receiver.
+/// </summary>
 public class PullRequestWebhookPayload
 {
     [JsonPropertyName("action")]
-    public string Action { get; init; } = string.Empty;
+    public string? Action { get; init; }
 
     [JsonPropertyName("pull_request")]
-    public PullRequest PullRequest { get; init; } = new();
+    public PullRequest? PullRequest { get; init; }
 
     [JsonPropertyName("repository")]
-    public Repository Repository { get; init; } = new();
+    public Repository? Repository { get; init; }
 
     [JsonPropertyName("installation")]
-    public Installation Installation { get; init; } = new();
-}
-
-public class PullRequest
-{
-    [JsonPropertyName("number")]
-    public int Number { get; init; }
-
-    [JsonPropertyName("title")]
-    public string Title { get; init; } = string.Empty;
-
-    [JsonPropertyName("base")]
-    public GitRef Base { get; init; } = new();
-
-    [JsonPropertyName("head")]
-    public GitRef Head { get; init; } = new();
-
-    [JsonPropertyName("draft")]
-    public bool Draft { get; init; }
-}
-
-public class GitRef
-{
-    [JsonPropertyName("sha")]
-    public string Sha { get; init; } = string.Empty;
-}
-
-public class Repository
-{
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
-
-    [JsonPropertyName("owner")]
-    public RepositoryOwner Owner { get; init; } = new();
-}
-
-public class RepositoryOwner
-{
-    [JsonPropertyName("login")]
-    public string Login { get; init; } = string.Empty;
-}
-
-public class Installation
-{
-    [JsonPropertyName("id")]
-    public long Id { get; init; }
+    public Installation? Installation { get; init; }
 }
