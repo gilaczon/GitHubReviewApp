@@ -60,7 +60,8 @@ public static class DiffFileClassifier
         ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc"
     };
 
-    // Licence and notice files, whatever their extension. They are documentation, though "license" is also a personal-data keyword.
+    // Licence and notice files, with no extension or any but a source-code or configuration one. They are documentation, though "license"
+    // is also a personal-data keyword.
     private static readonly HashSet<string> _licenceNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "LICENSE", "LICENCE", "COPYING", "NOTICE"
@@ -192,8 +193,9 @@ public static class DiffFileClassifier
     }
 
     /// <summary>
-    /// True for a documentation file (.md, .mdx, .markdown, .txt, .rst or .adoc), for a licence file (LICENSE, LICENCE, COPYING or NOTICE,
-    /// whatever its extension, and LICENSE-* or LICENCE-*), and for anything inside a docs or doc folder.
+    /// True for a documentation file (.md, .mdx, .markdown, .txt, .rst or .adoc), for a licence file (named LICENSE, LICENCE, COPYING or
+    /// NOTICE, or starting LICENSE- or LICENCE-, with no extension or any but a source-code or configuration one, so License.cs is code),
+    /// and for anything inside a docs or doc folder.
     /// </summary>
     public static bool IsDocumentation(string path)
     {
@@ -277,8 +279,17 @@ public static class DiffFileClassifier
             || segments.SkipLast(1).Any(_documentationDirectoryNames.Contains);
     }
 
+    // A source-code or configuration file named like a licence file is the application's own (a Models/License.cs holding a driver's
+    // licence is personal data): it is classed as it would be anywhere else, the exception pipeline folders make for application code.
     private static bool IsLicenceName(string fileName)
     {
+        var extension = Path.GetExtension(fileName);
+
+        if (_sourceExtensions.Contains(extension) || _configurationExtensions.Contains(extension))
+        {
+            return false;
+        }
+
         var name = Path.GetFileNameWithoutExtension(fileName);
 
         return _licenceNames.Contains(name) || _licenceNamePrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));

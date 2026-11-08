@@ -119,8 +119,10 @@ All lengths are UTF-8 bytes unless stated.
 2. Generated or vendored (existing rules). Ordered after docs.
 3. Tests (existing test-path rules). Ordered after the rest.
 4. Docs (`.md`, `.mdx`, `.markdown`, `.txt`, `.rst`, `.adoc`, licence files, or under a `docs/` folder). Ordered after tests. A licence
-   file is one named `LICENSE`, `LICENCE`, `COPYING` or `NOTICE` (any case, any extension) or starting `LICENSE-` or `LICENCE-`: it is
-   documentation, though `license` is a personal-data keyword.
+   file is one named `LICENSE`, `LICENCE`, `COPYING` or `NOTICE`, or starting `LICENSE-` or `LICENCE-`, in any case and with no
+   extension or any extension but a source-code or configuration one (`COPYING.LESSER`): it is documentation, though `license` is a
+   personal-data keyword. A source-code or configuration file named like one (`src/Models/License.cs`, `license.json`) is the
+   application's own, classed as it would be anywhere else.
 5. Otherwise the first of these that matches, in this order: **auth**, **payments**, **cards**, **bank login**, **personal data**,
    **pipelines and workflows**, **config**, else **the rest**.
 

@@ -415,10 +415,15 @@ public class DiffFileClassifierTests
     [InlineData("LICENSE", RiskTier.Docs)]
     [InlineData("licence", RiskTier.Docs)]
     [InlineData("COPYING", RiskTier.Docs)]
+    [InlineData("COPYING.LESSER", RiskTier.Docs)]
     [InlineData("NOTICE", RiskTier.Docs)]
     [InlineData("LICENSE-MIT", RiskTier.Docs)]
     [InlineData("src/Lib/LICENSE", RiskTier.Docs)]
     [InlineData("src/Verification/DriverLicenseValidator.cs", RiskTier.PersonalData)]
+    // A source-code or configuration file named like a licence file is the application's own, classed as it would be anywhere else
+    [InlineData("src/Models/License.cs", RiskTier.PersonalData)]
+    [InlineData("src/Notices/Notice.vue", RiskTier.Source)]
+    [InlineData("license.json", RiskTier.PersonalData)]
     // First match wins
     [InlineData("docs/logo.png", RiskTier.NotReadable)]
     [InlineData("node_modules/stripe/index.js", RiskTier.GeneratedOrVendored)]
@@ -479,6 +484,7 @@ public class DiffFileClassifierTests
     [InlineData("docs/setup.yaml", true)]
     [InlineData("src/doc/Notes.cs", true)]
     [InlineData("LICENSE", true)]
+    [InlineData("src/Models/License.cs", false)]       // a source file named like a licence file is code
     [InlineData("src/Program.cs", false)]
     [InlineData("docs", false)]                        // a file named docs is not a docs folder
     [InlineData("src/documents/Upload.cs", false)]     // the folder name must be docs or doc, whole
