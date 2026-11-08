@@ -233,6 +233,51 @@ public class ChecklistMergerTests
     }
 
     [Fact]
+    public void Merge_GivenAPassRunThenAPassWithCommentsRun_Should_TreatRunBAsTheStricterRun()
+    {
+        // Arrange — run A rates every check a pass, so its own result is PASS; run B has a concern on Testing, so its own result is
+        // PASS WITH COMMENTS. Neither fails Security, and each run lists one finding of its own.
+        var unnamedUnit = new ChecklistFinding(CheckId.StandardsDesign, "src/RefundClient.cs", 5, "The retry delay hides its unit.", "Put the unit in its name.");
+        var untestedFailure = new ChecklistFinding(CheckId.Testing, "tests/RefundClientTests.cs", 40, "No test for a failed refund.", "Add one.");
+        var runA = Run()
+            with { Findings = [unnamedUnit], Summary = "Summary from run A.", CoverageNote = "Coverage note from run A." };
+        var runB = Run((CheckId.Testing, CheckStatus.Concern, "No test for the failure path.", false))
+            with { Findings = [untestedFailure], Summary = "Summary from run B.", CoverageNote = "Coverage note from run B." };
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — PASS WITH COMMENTS is worse than PASS, so the run that found the concern leads
+        merged.Summary.Should().Be("Summary from run B.");
+        merged.CoverageNote.Should().Be("Coverage note from run B.");
+        merged.StricterRunVerdict.Should().Be(ReviewVerdict.PassWithComments);
+        merged.OtherRunVerdict.Should().Be(ReviewVerdict.Pass);
+        merged.Findings.Should().Equal(untestedFailure, unnamedUnit);
+    }
+
+    [Fact]
+    public void Merge_GivenAPassWithCommentsRunThenAPassRun_Should_TreatRunAAsTheStricterRun()
+    {
+        // Arrange — the answers of the test above in the other order: run A has the concern on Testing and run B rates every check a pass
+        var untestedFailure = new ChecklistFinding(CheckId.Testing, "tests/RefundClientTests.cs", 40, "No test for a failed refund.", "Add one.");
+        var unnamedUnit = new ChecklistFinding(CheckId.StandardsDesign, "src/RefundClient.cs", 5, "The retry delay hides its unit.", "Put the unit in its name.");
+        var runA = Run((CheckId.Testing, CheckStatus.Concern, "No test for the failure path.", false))
+            with { Findings = [untestedFailure], Summary = "Summary from run A.", CoverageNote = "Coverage note from run A." };
+        var runB = Run()
+            with { Findings = [unnamedUnit], Summary = "Summary from run B.", CoverageNote = "Coverage note from run B." };
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — a run B that differs but is milder does not take over from run A
+        merged.Summary.Should().Be("Summary from run A.");
+        merged.CoverageNote.Should().Be("Coverage note from run A.");
+        merged.StricterRunVerdict.Should().Be(ReviewVerdict.PassWithComments);
+        merged.OtherRunVerdict.Should().Be(ReviewVerdict.Pass);
+        merged.Findings.Should().Equal(untestedFailure, unnamedUnit);
+    }
+
+    [Fact]
     public void Merge_GivenTheSameStatusForEveryCheck_Should_ReportAgreement()
     {
         // Arrange — agreement is about statuses: the runs' notes on Testing and their serious flags differ
