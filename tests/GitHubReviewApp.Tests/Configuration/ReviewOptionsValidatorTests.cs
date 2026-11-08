@@ -174,6 +174,7 @@ public class ReviewOptionsValidatorTests
     [Theory]
     [InlineData("AllowedAuthorAssociations", "OWNER,MEMBER")]
     [InlineData("GuidelinePaths", "docs/a.md,docs/b.md")]
+    [InlineData("HighRiskRepositories", "a/b,c/d")]
     public void Validate_GivenAListSettingWrittenAsOneValue_Should_FailBecauseTheBinderIgnoresItAndFallsBackToTheDefault(string setting, string value)
     {
         // Arrange — "Review__AllowedAuthorAssociations=OWNER,MEMBER" binds to nothing, which leaves the list empty and lets every author trigger a review
@@ -188,6 +189,28 @@ public class ReviewOptionsValidatorTests
         // Assert
         result.Failed.Should().BeTrue();
         result.Failures.Should().ContainSingle().Which.Should().Contain($"Review:{setting}").And.Contain("list");
+    }
+
+    [Fact]
+    public void Validate_GivenASeededListAlsoWrittenAsOneValue_Should_Fail()
+    {
+        // Arrange — appsettings.json seeds an entry, and "Review__HighRiskRepositories=a/b,c/d" in the app settings is one value: the binder keeps
+        // the seeded entry and drops the value without a word, so both listed repositories would stay on Sonnet
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Review:HighRiskRepositories:0"] = "MoneyMeTeam/Moneyme.Global.Library.VueApp",
+                ["Review:HighRiskRepositories"] = "a/b,c/d"
+            })
+            .Build();
+        var options = configuration.GetSection(ReviewOptions.SectionName).Get<ReviewOptions>()!;
+        var sut = new ReviewOptionsValidator(configuration);
+
+        // Act
+        var result = sut.Validate(Options.DefaultName, options);
+
+        // Assert — the list keeps its entry, so the message does not say it falls back to its default
+        result.Failures.Should().ContainSingle().Which.Should().Contain("Review:HighRiskRepositories").And.NotContain("default");
     }
 
     [Fact]

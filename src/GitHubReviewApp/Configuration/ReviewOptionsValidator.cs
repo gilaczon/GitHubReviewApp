@@ -38,6 +38,7 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
 
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.AllowedAuthorAssociations));
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.GuidelinePaths));
+        RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.HighRiskRepositories));
 
         RequireAtLeast(failures, "MaxChunkBytes", options.MaxChunkBytes, MinimumUsefulBytes);
         RequireAtLeast(failures, "MaxFileBytes", options.MaxFileBytes, MinimumUsefulBytes);
@@ -107,22 +108,28 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
     }
 
     /// <summary>
-    /// "Review__AllowedAuthorAssociations=OWNER,MEMBER" is one value, and the binder leaves a list alone when it is given one. The list then stays at its
-    /// default, which for the author allow list is empty, and an empty list lets every author trigger a review: a typo that opens the gate.
+    /// "Review__AllowedAuthorAssociations=OWNER,MEMBER" is one value, and the binder never reads a list from one value. Alone, the value is refused by
+    /// the app's strict binding, and a binder that is not strict leaves the list at its default, which for the author allow list is empty: an empty
+    /// list lets every author trigger a review, a typo that opens the gate. Next to entries from elsewhere, such as the repository appsettings.json
+    /// seeds in Review:HighRiskRepositories, even the strict binding drops the value without a word and keeps only those entries. So any value that
+    /// is not blank is refused here, whether or not the list has entries.
     /// </summary>
     private void RejectListWrittenAsOneValue(List<string> failures, string setting)
     {
         var section = _configuration?.GetSection($"{ReviewOptions.SectionName}:{setting}");
 
-        if (section?.Value is not { } value || string.IsNullOrWhiteSpace(value) || section.GetChildren().Any())
+        if (section?.Value is not { } value || string.IsNullOrWhiteSpace(value))
         {
             return;
         }
 
         var shown = value.Length > MaxValueCharsShown ? value[..MaxValueCharsShown] + "…" : value;
+        var outcome = section.GetChildren().Any()
+            ? "so the setting would keep only the entries it is given one by one"
+            : "so the setting would stay at its default";
 
         failures.Add(
-            $"Review:{setting} is a list, but it is set to the single value '{shown}', which the configuration binder ignores, so the setting would stay at its default. " +
+            $"Review:{setting} is a list, but it is set to the single value '{shown}', which the configuration binder ignores, {outcome}. " +
             $"Write one entry per item: a JSON array, or Review__{setting}__0, Review__{setting}__1 and so on in the app settings.");
     }
 
