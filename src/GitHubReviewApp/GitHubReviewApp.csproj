@@ -25,6 +25,9 @@
     </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Review\ChecklistSystemPrompt.md" LogicalName="GitHubReviewApp.Review.ChecklistSystemPrompt.md" />
+  </ItemGroup>
+  <ItemGroup>
     <None Update="appsettings.Production.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
