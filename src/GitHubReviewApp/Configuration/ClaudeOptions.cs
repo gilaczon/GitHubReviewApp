@@ -35,4 +35,10 @@ public sealed class ClaudeOptions
 
     /// <summary>Retries performed by the SDK for 408/409/429/5xx and connection errors. Each one spends part of the time budget above.</summary>
     public int MaxRetries { get; init; } = 1;
+
+    /// <summary>
+    /// What each model charges, by model id (design 5.10), used to put a cost on every review. Ids are compared without regard to letter case. A model
+    /// that is not listed has no cost, and the review record says so instead of guessing, so a model the app can fall back to belongs here too.
+    /// </summary>
+    public Dictionary<string, ModelPrice> Pricing { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }

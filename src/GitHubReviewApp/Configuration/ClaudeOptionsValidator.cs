@@ -52,6 +52,27 @@ public sealed class ClaudeOptionsValidator : IValidateOptions<ClaudeOptions>
                 $"Claude:Effort '{options.Effort}' is not one of {string.Join(", ", ClaudeOptions.KnownEfforts)}. Leave it empty to leave the setting out.");
         }
 
+        foreach (var (model, price) in options.Pricing)
+        {
+            if (string.IsNullOrWhiteSpace(model))
+            {
+                failures.Add("Claude:Pricing has a price with no model name. Prices are looked up by model id, so it would never be used.");
+            }
+
+            RequirePriceNotNegative(failures, model, nameof(ModelPrice.InputPerMillionTokens), price.InputPerMillionTokens);
+            RequirePriceNotNegative(failures, model, nameof(ModelPrice.OutputPerMillionTokens), price.OutputPerMillionTokens);
+            RequirePriceNotNegative(failures, model, nameof(ModelPrice.CacheWritePerMillionTokens), price.CacheWritePerMillionTokens);
+            RequirePriceNotNegative(failures, model, nameof(ModelPrice.CacheReadPerMillionTokens), price.CacheReadPerMillionTokens);
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    private static void RequirePriceNotNegative(List<string> failures, string model, string priceName, decimal value)
+    {
+        if (value < 0)
+        {
+            failures.Add($"Claude:Pricing:{model}:{priceName} must be at least 0, but it is {value}. A negative price would take money off the cost of every review.");
+        }
     }
 }
