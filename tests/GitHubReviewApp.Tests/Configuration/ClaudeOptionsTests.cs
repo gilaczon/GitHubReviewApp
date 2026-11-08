@@ -82,6 +82,33 @@ public class ClaudeOptionsTests
     }
 
     [Fact]
+    public void IsRefusalFallbackEnabled_GivenNoConfiguration_Should_BeOn()
+    {
+        // Arrange
+
+        // Act
+        var options = new ClaudeOptions();
+
+        // Assert
+        options.IsRefusalFallbackEnabled.Should().BeTrue("the owner chose Anthropic's refusal fallback, so a run uses it unless it is switched off");
+    }
+
+    [Fact]
+    public void IsRefusalFallbackEnabled_GivenTheShippedAppSettings_Should_BeWrittenOutAsOn()
+    {
+        // Arrange
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(AppContext.BaseDirectory, "appsettings.json"), optional: false)
+            .Build();
+
+        // Act
+        var isEnabled = configuration.GetValue<bool?>($"{ClaudeOptions.SectionName}:{nameof(ClaudeOptions.IsRefusalFallbackEnabled)}");
+
+        // Assert — read as written, not through the default, so an operator sees the switch in the file
+        isEnabled.Should().BeTrue();
+    }
+
+    [Fact]
     public void SectionName_GivenTheConfigurationLayout_Should_BeClaude()
     {
         // Arrange

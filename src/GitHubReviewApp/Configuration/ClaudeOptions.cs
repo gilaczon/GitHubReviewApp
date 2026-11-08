@@ -37,6 +37,13 @@ public sealed class ClaudeOptions
     public int MaxRetries { get; init; } = 1;
 
     /// <summary>
+    /// Whether a checklist run uses Anthropic's server-side refusal fallback (design 5.5): the call goes to the beta Messages endpoint with
+    /// <c>fallbacks: "default"</c>, so a request the asked model declines is answered by the model Anthropic picks for that refusal, in the same
+    /// call. Off, the run uses the standard endpoint and a refusal ends it.
+    /// </summary>
+    public bool IsRefusalFallbackEnabled { get; init; } = true;
+
+    /// <summary>
     /// What each model charges, by model id (design 5.10), used to put a cost on every review. Ids are compared without regard to letter case. A model
     /// that is not listed has no cost, and the review record says so instead of guessing, so a model the app can fall back to belongs here too.
     /// </summary>

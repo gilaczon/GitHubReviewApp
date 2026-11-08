@@ -9,9 +9,84 @@ internal static class AnthropicFixtures
 {
     public const string ModelId = "claude-sonnet-5-5";
 
+    // A JSON escape is built from this, so the source holds no escape sequence for an editor or a tool to turn into the character itself.
+    private const string Backslash = "\\";
+
     // The API writes its JSON with the characters of code and of other languages as they are: a less-than sign or an accented letter is not turned
     // into a \u escape the way the serializer's default does, so the events here are written the same way.
     private static readonly JsonSerializerOptions _wireOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    // The eight check ids of the checklist schema, in the checklist's order, written out here rather than read from the code under test.
+    private static readonly string[] _checkIds =
+        ["standards-design", "functionality", "performance", "security", "testing", "error-handling", "scalability", "dependencies"];
+
+    /// <summary>A checklist answer as the model writes it under the checklist schema. Without <paramref name="checks"/>, all eight checks pass.</summary>
+    public static string ChecklistJson(
+        string summary = "Adds retries.",
+        IEnumerable<object>? checks = null,
+        IEnumerable<object>? findings = null,
+        string coverageNote = "")
+    {
+        return JsonSerializer.Serialize(
+            new { summary, checks = checks ?? AllChecks(), findings = findings ?? Array.Empty<object>(), coverage_note = coverageNote },
+            _wireOptions);
+    }
+
+    /// <summary>One entry of a checklist answer's <c>checks</c> list. <paramref name="isSerious"/> is written as the answer's <c>serious</c> field.</summary>
+    public static object Check(string id, string status = "pass", string note = "", bool isSerious = false)
+    {
+        return new { id, status, note, serious = isSerious };
+    }
+
+    /// <summary>All eight checks, in the checklist's order, each rated <paramref name="status"/>.</summary>
+    public static IReadOnlyList<object> AllChecks(string status = "pass")
+    {
+        return _checkIds.Select(id => Check(id, status)).ToList();
+    }
+
+    /// <summary>One entry of a checklist answer's <c>findings</c> list.</summary>
+    public static object ChecklistFinding(
+        string check = "functionality",
+        string file = "src/Foo.cs",
+        int line = 11,
+        string issue = "Retries twice.",
+        string fix = "Retry once.")
+    {
+        return new { check, file, line, issue, fix };
+    }
+
+    /// <summary>
+    /// The block the beta API puts in the content where a model that declined hands over to the next one: no text, and no deltas when streamed. It
+    /// is written by serialising the SDK's own type, so its shape is the SDK's and not a guess at it.
+    /// </summary>
+    public static object FallbackBlock(string fromModel, string toModel, string category = "cyber")
+    {
+        var block = new BetaMessages.BetaFallbackBlock
+        {
+            From = new BetaMessages.BetaFallbackInfo { Model = fromModel },
+            To = new BetaMessages.BetaFallbackInfo { Model = toModel },
+            Trigger = new BetaMessages.BetaFallbackRefusalTrigger { Category = category }
+        };
+
+        return JsonSerializer.SerializeToElement(block);
+    }
+
+    /// <summary>
+    /// One entry of the beta API's <c>usage.iterations</c>: an attempt made for the request, with its own model and tokens. A model that declined is a
+    /// <c>message</c> entry; the fallback model whose output is the returned message is the <c>fallback_message</c> entry.
+    /// </summary>
+    public static object Iteration(string type, string model, long inputTokens, long outputTokens, long cacheReadTokens = 0, long cacheCreationTokens = 0)
+    {
+        return new
+        {
+            type,
+            model,
+            input_tokens = inputTokens,
+            output_tokens = outputTokens,
+            cache_read_input_tokens = cacheReadTokens,
+            cache_creation_input_tokens = cacheCreationTokens
+        };
+    }
 
     public static string ReviewJson(string summary = "Adds retry handling.", IEnumerable<object>? findings = null, int omittedFindings = 0)
     {
@@ -56,6 +131,10 @@ internal static class AnthropicFixtures
     /// says one input token and no cache use, and the final delta restates all four counters.
     /// </param>
     /// <param name="bytesPerRead">When set, the stream hands out that many bytes per read, so a character of several bytes can arrive in pieces.</param>
+    /// <param name="iterations">
+    /// The beta API's per-attempt usage (see <see cref="Iteration"/>), sent in the final delta's usage, where the API reports them once every attempt
+    /// has run.
+    /// </param>
     public static HttpResponseMessage Message(
         IEnumerable<object>? content = null,
         string stopReason = "end_turn",
@@ -67,7 +146,8 @@ internal static class AnthropicFixtures
         string model = ModelId,
         bool isCacheUsageOmitted = false,
         bool isUsageRestatedInFinalEvent = false,
-        int? bytesPerRead = null)
+        int? bytesPerRead = null,
+        IEnumerable<object>? iterations = null)
     {
         var startUsage = isUsageRestatedInFinalEvent
             ? Usage(1, 1, 0, 0, isCacheUsageOmitted: false)
@@ -114,6 +194,11 @@ internal static class AnthropicFixtures
             ? Usage(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, isCacheUsageOmitted)
             : new { output_tokens = outputTokens };
 
+        if (iterations is not null)
+        {
+            finalUsage = WithIterations(finalUsage, iterations);
+        }
+
         events.Add(Event("message_delta", new { type = "message_delta", delta, usage = finalUsage }));
         events.Add(Event("message_stop", new { type = "message_stop" }));
 
@@ -148,6 +233,26 @@ internal static class AnthropicFixtures
     public static HttpResponseMessage StreamWithAnEventThatIsNotJson()
     {
         var events = new List<string> { MessageStartEvent(), "event: content_block_start\ndata: {this is not json\n\n" };
+
+        return Sse(string.Concat(events));
+    }
+
+    /// <summary>
+    /// A stream whose text holds half of a surrogate pair, written as the JSON escape for it. The API sends valid UTF-8, so no real reply is like
+    /// this, and the SDK refuses to read the event.
+    /// </summary>
+    public static HttpResponseMessage StreamWithTextThatIsNotValidUnicode()
+    {
+        var halfOfASurrogatePair = Backslash + "ud800";
+        var events = new List<string>
+        {
+            MessageStartEvent(),
+            Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "text", text = string.Empty } }),
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Adds retries" + halfOfASurrogatePair + "\"}}\n\n",
+            Event("content_block_stop", new { type = "content_block_stop", index = 0 }),
+            Event("message_delta", new { type = "message_delta", delta = new { stop_reason = "end_turn", stop_sequence = (string?)null }, usage = new { output_tokens = 5 } }),
+            Event("message_stop", new { type = "message_stop" })
+        };
 
         return Sse(string.Concat(events));
     }
@@ -231,6 +336,14 @@ internal static class AnthropicFixtures
                 usage = Usage(100, 1, 0, 0, isCacheUsageOmitted: false)
             }
         });
+    }
+
+    private static JsonObject WithIterations(object usage, IEnumerable<object> iterations)
+    {
+        var withIterations = JsonSerializer.SerializeToNode(usage, _wireOptions)!.AsObject();
+        withIterations["iterations"] = JsonSerializer.SerializeToNode(iterations.ToList(), _wireOptions);
+
+        return withIterations;
     }
 
     private static object Usage(long inputTokens, long outputTokens, long cacheReadTokens, long cacheCreationTokens, bool isCacheUsageOmitted)

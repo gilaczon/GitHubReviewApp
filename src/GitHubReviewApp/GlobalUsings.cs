@@ -1,6 +1,7 @@
 global using Anthropic;
 global using Anthropic.Exceptions;
 global using AnthropicMessages = Anthropic.Models.Messages;
+global using BetaMessages = Anthropic.Models.Beta.Messages;
 global using GitHubReviewApp.Configuration;
 global using GitHubReviewApp.Models;
 global using GitHubReviewApp.Review;

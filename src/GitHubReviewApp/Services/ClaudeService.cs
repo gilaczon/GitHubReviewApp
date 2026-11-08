@@ -3,21 +3,27 @@ namespace GitHubReviewApp.Services;
 /// <summary>
 /// Sends review requests to Claude through the official Anthropic SDK. The model, output limit and effort come from configuration. The reply is
 /// streamed (a long review on a silent connection is what request timeouts cut off), requested as schema-constrained JSON, read by content-block
-/// type (current models may put a thinking block first), and checked for refusals and truncation. One time budget covers the whole call.
+/// type (current models may put a thinking block first), and checked for refusals and truncation. One time budget covers the whole call. A checklist
+/// run (design 5.5) asks for the model its request names and, with <see cref="ClaudeOptions.IsRefusalFallbackEnabled"/>, goes through the beta
+/// endpoint with Anthropic's server-side refusal fallback.
 /// </summary>
 public class ClaudeService : IClaudeService
 {
     private const string ApiKeySecretName = "AnthropicApiKey";
     private const int MaxRejectionReasonChars = 300;
+    private const string RefusalFallbackBeta = "server-side-fallback-2026-07-01";
 
     // The SDK's own limit covers only the wait for the response headers of each attempt: a streamed reply keeps arriving after them, and a stream that
-    // goes quiet is not something it times out. So the budget in CreateMessageAsync is what ends a stalled stream, and the whole call, retries
+    // goes quiet is not something it times out. So the budget in WithinBudgetAsync is what ends a stalled stream, and the whole call, retries
     // included. The SDK's limit is set a little longer than the budget, so a connection that never answers at all is ended by the budget, which says
     // so, and not by the SDK's own message in a race with it.
     private static readonly TimeSpan _sdkAttemptMargin = TimeSpan.FromSeconds(15);
 
     private static readonly IReadOnlyDictionary<string, JsonElement> _reviewSchema =
         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(ReviewResponseSchema.Json)!;
+
+    private static readonly IReadOnlyDictionary<string, JsonElement> _checklistSchema =
+        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(ChecklistSchema.Json)!;
 
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _config;
@@ -47,6 +53,12 @@ public class ClaudeService : IClaudeService
         _client = new Lazy<AnthropicClient>(CreateClient, LazyThreadSafetyMode.PublicationOnly);
     }
 
+    /// <summary>
+    /// What a checklist run's reply says, from either endpoint: why the model stopped, the refusal category, the text of every text block in order
+    /// (a mid-stream fallback leaves the answer split around its fallback block), the model that answered and every attempt the API made.
+    /// </summary>
+    private sealed record RunReply(string StopReason, string? RefusalCategory, string Text, string Model, IReadOnlyList<ModelAttempt> Attempts);
+
     public async Task<ClaudeReviewResult> ReviewAsync(ClaudeReviewRequest request, CancellationToken cancellationToken)
     {
         using var activity = ActivitySources.ClaudeService.StartActivity("chat", ActivityKind.Client);
@@ -57,10 +69,11 @@ public class ClaudeService : IClaudeService
 
         try
         {
-            var parameters = BuildParameters(request);
+            var parameters = BuildParameters(_options.Model, _reviewSchema, request.SystemPrompt, request.UserMessage);
 
             _logger.LogInformation("Calling Claude ({Model}) for review.", _options.Model);
-            var message = await CreateMessageAsync(parameters, cancellationToken);
+            var message = await WithinBudgetAsync(
+                token => _client.Value.Messages.CreateStreaming(parameters, token).Aggregate(), cancellationToken);
 
             return ToResult(message, activity);
         }
@@ -76,8 +89,43 @@ public class ClaudeService : IClaudeService
         }
     }
 
-    private async Task<AnthropicMessages.Message> CreateMessageAsync(
-        AnthropicMessages.MessageCreateParams parameters, CancellationToken cancellationToken)
+    public async Task<ClaudeRunResult> ReviewAsync(ClaudeRunRequest request, CancellationToken cancellationToken)
+    {
+        using var activity = ActivitySources.ClaudeService.StartActivity("chat", ActivityKind.Client);
+        activity?.SetTag("gen_ai.system", "anthropic");
+        activity?.SetTag("gen_ai.operation.name", "chat");
+        activity?.SetTag("gen_ai.request.model", request.Model);
+        activity?.SetTag("gen_ai.request.max_tokens", _options.MaxOutputTokens);
+
+        try
+        {
+            _logger.LogInformation(
+                "Calling Claude ({Model}) for a checklist run, refusal fallback {RefusalFallback}.",
+                request.Model, _options.IsRefusalFallbackEnabled ? "on" : "off");
+
+            var reply = _options.IsRefusalFallbackEnabled
+                ? ToRunReply(await WithinBudgetAsync(
+                    token => _client.Value.Beta.Messages.CreateStreaming(BuildFallbackParameters(request), token).Aggregate(), cancellationToken))
+                : ToRunReply(await WithinBudgetAsync(
+                    token => _client.Value.Messages.CreateStreaming(
+                        BuildParameters(request.Model, _checklistSchema, request.SystemPrompt, request.UserMessage), token).Aggregate(),
+                    cancellationToken));
+
+            return ToRunResult(reply, activity);
+        }
+        catch (AnthropicApiException exception) when (IsRejectedAsInvalid(exception.StatusCode))
+        {
+            return ToRejectedRunResult(request, exception, activity);
+        }
+        catch (Exception exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+            activity?.AddException(exception);
+            throw;
+        }
+    }
+
+    private async Task<T> WithinBudgetAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
     {
         // One budget for the whole call: connecting, the SDK's retries and every event of the reply. The SDK's own limit covers a single attempt, and a
         // stream that goes quiet part way through would otherwise hold the review until the host gave up on it.
@@ -86,7 +134,7 @@ public class ClaudeService : IClaudeService
 
         try
         {
-            return await _client.Value.Messages.CreateStreaming(parameters, limited.Token).Aggregate();
+            return await call(limited.Token);
         }
         catch (Exception exception) when (budget.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -131,11 +179,12 @@ public class ClaudeService : IClaudeService
         };
     }
 
-    private AnthropicMessages.MessageCreateParams BuildParameters(ClaudeReviewRequest request)
+    private AnthropicMessages.MessageCreateParams BuildParameters(
+        string model, IReadOnlyDictionary<string, JsonElement> schema, string systemPrompt, string userMessage)
     {
         var outputConfig = new AnthropicMessages.OutputConfig
         {
-            Format = new AnthropicMessages.JsonOutputFormat { Schema = _reviewSchema }
+            Format = new AnthropicMessages.JsonOutputFormat { Schema = schema }
         };
 
         // Only send effort when configured: older models reject the parameter, and the SDK would
@@ -149,14 +198,47 @@ public class ClaudeService : IClaudeService
         // and reject non-default sampling, disabled thinking and forced tool use.
         return new AnthropicMessages.MessageCreateParams
         {
-            Model = _options.Model,
+            Model = model,
             MaxTokens = _options.MaxOutputTokens,
             System = new List<AnthropicMessages.TextBlockParam>
             {
-                // Marked cacheable so repeated reviews with the same rules and guidelines read them from cache.
-                new() { Text = request.SystemPrompt, CacheControl = new AnthropicMessages.CacheControlEphemeral() }
+                // Marked cacheable so repeated reviews with the same rules and guidelines read them from cache. No TTL: the default five-minute
+                // lifetime is the one whose write price Claude:Pricing holds.
+                new() { Text = systemPrompt, CacheControl = new AnthropicMessages.CacheControlEphemeral() }
             },
-            Messages = [new AnthropicMessages.UserMessageParam { Content = request.UserMessage }],
+            Messages = [new AnthropicMessages.UserMessageParam { Content = userMessage }],
+            OutputConfig = outputConfig
+        };
+    }
+
+    /// <summary>
+    /// The beta request for a checklist run with the refusal fallback: the same request as the standard one, plus the fallback beta and
+    /// <c>fallbacks: "default"</c>, which lets Anthropic pick the model that answers for each refusal category.
+    /// </summary>
+    private BetaMessages.MessageCreateParams BuildFallbackParameters(ClaudeRunRequest request)
+    {
+        var outputConfig = new BetaMessages.BetaOutputConfig
+        {
+            Format = new BetaMessages.BetaJsonOutputFormat { Schema = _checklistSchema }
+        };
+
+        if (ParseBetaEffort(_options.Effort) is { } effort)
+        {
+            outputConfig = outputConfig with { Effort = effort };
+        }
+
+        return new BetaMessages.MessageCreateParams
+        {
+            Betas = [RefusalFallbackBeta],
+            Fallbacks = new BetaMessages.Default(),
+            Model = request.Model,
+            MaxTokens = _options.MaxOutputTokens,
+            System = new List<BetaMessages.BetaTextBlockParam>
+            {
+                // No TTL, as in the standard request: the default five-minute lifetime is the one Claude:Pricing prices cache writes for.
+                new() { Text = request.SystemPrompt, CacheControl = new BetaMessages.BetaCacheControlEphemeral() }
+            },
+            Messages = [new BetaMessages.BetaUserMessageParam { Content = request.UserMessage }],
             OutputConfig = outputConfig
         };
     }
@@ -177,6 +259,20 @@ public class ClaudeService : IClaudeService
             "max" => AnthropicMessages.Effort.Max,
             _ => throw new InvalidOperationException(
                 $"Unknown Claude effort level '{effort}'. Use low, medium, high, xhigh or max, or leave it empty.")
+        };
+    }
+
+    private static BetaMessages.Effort? ParseBetaEffort(string? effort)
+    {
+        // The beta endpoint has its own effort type with the same five levels, so the standard parse decides and this only translates.
+        return ParseEffort(effort) switch
+        {
+            null => null,
+            AnthropicMessages.Effort.Low => BetaMessages.Effort.Low,
+            AnthropicMessages.Effort.Medium => BetaMessages.Effort.Medium,
+            AnthropicMessages.Effort.High => BetaMessages.Effort.High,
+            AnthropicMessages.Effort.Xhigh => BetaMessages.Effort.Xhigh,
+            _ => BetaMessages.Effort.Max
         };
     }
 
@@ -330,6 +426,161 @@ public class ClaudeService : IClaudeService
             usage,
             OmittedFindingCount: parsed.OmittedFindingCount,
             DroppedFindingCount: parsed.DroppedEntryCount);
+    }
+
+    private static RunReply ToRunReply(AnthropicMessages.Message message)
+    {
+        var model = message.Model.Raw();
+        var usage = new ClaudeUsage(
+            message.Usage.InputTokens,
+            message.Usage.OutputTokens,
+            message.Usage.CacheReadInputTokens ?? 0,
+            message.Usage.CacheCreationInputTokens ?? 0);
+
+        return new RunReply(
+            StopReasonOf(message.StopReason?.Raw()),
+            message.StopDetails?.Category?.Raw(),
+            string.Concat(message.Content.Select(block => block.TryPickText(out AnthropicMessages.TextBlock? textBlock) ? textBlock.Text : string.Empty)),
+            model,
+            [new ModelAttempt(model, usage)]);
+    }
+
+    private static RunReply ToRunReply(BetaMessages.BetaMessage message)
+    {
+        var stopReason = StopReasonOf(message.StopReason?.Raw());
+        // The model that produced the answer. The SDK's aggregate takes it from the stream's first event and, after a fallback block, from the
+        // model that block hands over to (AnthropicSdkContractTests pins it), so a mid-stream fallback names the model that finished the answer.
+        var model = message.Model.Raw();
+        var attempts = new List<ModelAttempt>();
+
+        // Each attempt the API made, a declined one ("message") or the fallback model's ("fallback_message"), with its own model and tokens. The
+        // top-level usage covers only the attempt that produced the message. Other kinds of iteration (compaction, an advisor) are not part of a run.
+        foreach (var iteration in message.Usage.Iterations ?? [])
+        {
+            if (iteration.TryPickBetaMessageIterationUsage(out var declined))
+            {
+                attempts.Add(new ModelAttempt(
+                    declined.Model?.Raw() ?? model,
+                    new ClaudeUsage(declined.InputTokens, declined.OutputTokens, declined.CacheReadInputTokens, declined.CacheCreationInputTokens)));
+            }
+            else if (iteration.TryPickBetaFallbackMessageIterationUsage(out var served))
+            {
+                attempts.Add(new ModelAttempt(
+                    served.Model.Raw(),
+                    new ClaudeUsage(served.InputTokens, served.OutputTokens, served.CacheReadInputTokens, served.CacheCreationInputTokens)));
+            }
+        }
+
+        if (attempts.Count == 0)
+        {
+            attempts.Add(new ModelAttempt(model, new ClaudeUsage(
+                message.Usage.InputTokens,
+                message.Usage.OutputTokens,
+                message.Usage.CacheReadInputTokens ?? 0,
+                message.Usage.CacheCreationInputTokens ?? 0)));
+        }
+
+        // The fallback block marks where one model handed over to the next and has no text, so only text blocks are read.
+        return new RunReply(
+            stopReason,
+            message.StopDetails?.Category?.Raw(),
+            string.Concat(message.Content.Select(block => block.TryPickText(out BetaMessages.BetaTextBlock? textBlock) ? textBlock.Text : string.Empty)),
+            model,
+            attempts);
+    }
+
+    private static string StopReasonOf(string? stopReason)
+    {
+        // A reply that never reports why it stopped was cut off in transit. That is a failure to retry, not an answer to read, and no tokens are
+        // counted for it because the figures it carries are not final.
+        return stopReason ?? throw new IOException("The reply from Claude ended before the model finished.");
+    }
+
+    private ClaudeRunResult ToRunResult(RunReply reply, Activity? activity)
+    {
+        var totalUsage = reply.Attempts.Aggregate(ClaudeUsage.Empty, (total, attempt) => total.Plus(attempt.Usage));
+
+        RecordUsage(activity, totalUsage, reply.Model, reply.StopReason);
+
+        _logger.LogInformation(
+            "Claude finished a checklist run: model {Model}, stop reason {StopReason}, {AttemptCount} attempt(s), {InputTokens} input and {OutputTokens} output tokens.",
+            reply.Model, reply.StopReason, reply.Attempts.Count, totalUsage.InputTokens, totalUsage.OutputTokens);
+
+        var result = Judge(reply);
+
+        if (result.Outcome != RunOutcome.Completed)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Detail ?? result.Outcome.ToString());
+        }
+
+        CountRun(result.Outcome, reply.Model);
+
+        return result;
+    }
+
+    private ClaudeRunResult Judge(RunReply reply)
+    {
+        if (reply.StopReason == "refusal")
+        {
+            // With the fallback on, a final refusal means every model in the chain declined.
+            _logger.LogWarning("Claude declined the checklist run (category: {Category}).", reply.RefusalCategory ?? "unknown");
+
+            return new ClaudeRunResult(RunOutcome.Refused, null, reply.Model, reply.Attempts, reply.RefusalCategory);
+        }
+
+        if (reply.StopReason is "max_tokens" or "model_context_window_exceeded")
+        {
+            var isContextWindow = reply.StopReason == "model_context_window_exceeded";
+
+            if (isContextWindow)
+            {
+                _logger.LogWarning("The checklist run did not fit in the model's context window, so its answer was cut short.");
+            }
+            else
+            {
+                _logger.LogWarning("The checklist run's answer hit the output limit of {MaxTokens} tokens.", _options.MaxOutputTokens);
+            }
+
+            var detail = isContextWindow ? "context window exceeded" : "output limit reached";
+
+            return new ClaudeRunResult(RunOutcome.OutputTruncated, null, reply.Model, reply.Attempts, detail);
+        }
+
+        // Any other stop reason, one this code has never seen included, is judged by what the answer holds.
+        var read = ChecklistAnswerReader.Read(reply.Text);
+
+        if (read.Error is not null)
+        {
+            // The reader's reasons are fixed words that quote nothing of the answer, so they can be logged.
+            _logger.LogWarning("Claude's checklist answer could not be used: {Error}", read.Error);
+
+            return new ClaudeRunResult(RunOutcome.InvalidOutput, null, reply.Model, reply.Attempts, read.Error);
+        }
+
+        return new ClaudeRunResult(RunOutcome.Completed, read.Answer, reply.Model, reply.Attempts);
+    }
+
+    private ClaudeRunResult ToRejectedRunResult(ClaudeRunRequest request, AnthropicApiException exception, Activity? activity)
+    {
+        var detail = DescribeRejection(exception);
+
+        _logger.LogWarning("The AI service rejected a checklist run's request and would reject it again ({Detail}).", detail);
+
+        activity?.SetTag("http.response.status_code", (int)exception.StatusCode);
+        activity?.SetStatus(ActivityStatusCode.Error, detail);
+
+        // No model answered, so the count names the one that was asked for, and the result names none.
+        CountRun(RunOutcome.Rejected, request.Model);
+
+        return new ClaudeRunResult(RunOutcome.Rejected, null, string.Empty, [], detail);
+    }
+
+    private static void CountRun(RunOutcome outcome, string model)
+    {
+        AppMeters.ReviewRuns.Add(
+            1,
+            new KeyValuePair<string, object?>("outcome", outcome.ToString()),
+            new KeyValuePair<string, object?>("model", model));
     }
 
     private static void RecordUsage(Activity? activity, ClaudeUsage usage, string model, string stopReason)

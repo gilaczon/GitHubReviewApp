@@ -71,6 +71,16 @@ internal static class AppMeters
             unit: "requests",
             description: "Model requests, by how they ended");
 
+    /// <summary>
+    /// Checklist runs that finished, tagged <c>outcome</c> with the <see cref="Models.RunOutcome"/> name and <c>model</c> with the model that
+    /// answered (the one asked for when none did). A run that failed outright is thrown, not counted here.
+    /// </summary>
+    internal static readonly Counter<long> ReviewRuns =
+        _meter.CreateCounter<long>(
+            "github_review_app.review.runs",
+            unit: "runs",
+            description: "Checklist runs, by how they ended and the model that answered");
+
     /// <summary>Tagged <c>reason</c> with the <see cref="Models.ReviewSkipReason"/> name.</summary>
     internal static readonly Counter<long> ReviewsSkipped =
         _meter.CreateCounter<long>(

@@ -29,4 +29,17 @@ public class MockClaudeService : IClaudeService
 
         return new ClaudeReviewResult(ChunkOutcome.Completed, summary, [], "mock", ClaudeUsage.Empty);
     }
+
+    public async Task<ClaudeRunResult> ReviewAsync(ClaudeRunRequest request, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning("MockClaudeService is active — no real API call will be made.");
+
+        await Task.Delay(_simulatedLatency, cancellationToken);
+
+        // Every check passes, so a local run shows a whole comment; no model ran, so nothing was spent.
+        var rated = Checklist.Order.ToDictionary(id => id, id => new RatedCheck(id, CheckStatus.Pass, string.Empty, IsSerious: false));
+        var answer = new RunAnswer(rated.AsReadOnly(), [], "Mock review: no model was called.", string.Empty);
+
+        return new ClaudeRunResult(RunOutcome.Completed, answer, "mock", []);
+    }
 }

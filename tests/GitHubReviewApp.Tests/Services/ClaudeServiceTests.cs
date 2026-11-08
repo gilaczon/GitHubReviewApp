@@ -10,15 +10,18 @@ public class ClaudeServiceTests
 
     private static readonly ClaudeReviewRequest _sampleRequest = new("SYSTEM RULES", "USER PULL REQUEST");
 
+    private static readonly ClaudeRunRequest _runRequest = new("claude-sonnet-5-5", "CHECKLIST RULES", "PULL REQUEST INPUT");
+
     private sealed record CapturedRequest(JsonElement Body, string RawBody, HttpRequestMessage Message);
 
-    // Retries are off so error-path tests do not wait for the SDK's backoff.
+    // Retries are off so error-path tests do not wait for the SDK's backoff. The refusal fallback is on, as it ships.
     private static ClaudeOptions TestOptions(
         string model = "claude-sonnet-5-5",
         int maxOutputTokens = 16_000,
         string? effort = "high",
         int requestTimeoutSeconds = 30,
-        int maxRetries = 0)
+        int maxRetries = 0,
+        bool isRefusalFallbackEnabled = true)
     {
         return new ClaudeOptions
         {
@@ -26,7 +29,8 @@ public class ClaudeServiceTests
             MaxOutputTokens = maxOutputTokens,
             Effort = effort,
             RequestTimeoutSeconds = requestTimeoutSeconds,
-            MaxRetries = maxRetries
+            MaxRetries = maxRetries,
+            IsRefusalFallbackEnabled = isRefusalFallbackEnabled
         };
     }
 
@@ -80,6 +84,22 @@ public class ClaudeServiceTests
         return new CapturedRequest(document.RootElement.Clone(), rawBody, handler.LastRequest!);
     }
 
+    private static async Task<CapturedRequest> CaptureRunRequestAsync(ClaudeOptions options)
+    {
+        var rawBody = string.Empty;
+        var handler = new TestHttpMessageHandler(async request =>
+        {
+            rawBody = await request.Content!.ReadAsStringAsync();
+            return AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson())]);
+        });
+
+        await BuildSut(handler, options).ReviewAsync(_runRequest, CancellationToken.None);
+
+        using var document = JsonDocument.Parse(rawBody);
+
+        return new CapturedRequest(document.RootElement.Clone(), rawBody, handler.LastRequest!);
+    }
+
     private static string UserText(JsonElement body)
     {
         var content = body.GetProperty("messages")[0].GetProperty("content");
@@ -87,6 +107,34 @@ public class ClaudeServiceTests
         return content.ValueKind == JsonValueKind.String
             ? content.GetString()!
             : string.Concat(content.EnumerateArray().Select(block => block.GetProperty("text").GetString()));
+    }
+
+    // Every beta the request names, however the SDK spreads them over anthropic-beta headers and comma-separated values.
+    private static IReadOnlyList<string> BetasSent(HttpRequestMessage message)
+    {
+        return message.Headers
+            .Where(header => string.Equals(header.Key, "anthropic-beta", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(header => header.Value)
+            .SelectMany(value => value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .ToList();
+    }
+
+    // Sonnet 5.5 declined before writing anything and Sonnet 5 answered. The top-level usage covers only the attempt that produced the message;
+    // the iterations cover both.
+    private static HttpResponseMessage ReplyAnsweredAfterAFallback()
+    {
+        return AnthropicFixtures.Message(
+            [AnthropicFixtures.FallbackBlock("claude-sonnet-5-5", "claude-sonnet-5"), AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson())],
+            inputTokens: 1_100,
+            outputTokens: 400,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 900,
+            model: "claude-sonnet-5",
+            iterations:
+            [
+                AnthropicFixtures.Iteration("message", "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 20, cacheReadTokens: 300, cacheCreationTokens: 50),
+                AnthropicFixtures.Iteration("fallback_message", "claude-sonnet-5", inputTokens: 1_100, outputTokens: 400, cacheReadTokens: 0, cacheCreationTokens: 900)
+            ]);
     }
 
     // ── Construction ─────────────────────────────────────────────────────────
@@ -1181,5 +1229,419 @@ public class ClaudeServiceTests
 
         // Assert
         metrics.Measurements.Should().NotContain(measurement => measurement.Name.StartsWith("gen_ai.usage.", StringComparison.Ordinal));
+    }
+
+    // ── Checklist runs ───────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReviewAsync_GivenACompletedChecklist_Should_ReturnTheReadAnswerTheModelAndOneAttempt(bool isRefusalFallbackEnabled)
+    {
+        // Arrange — the same answer read back from either endpoint
+        var answer = AnthropicFixtures.ChecklistJson(
+            "Adds retries.",
+            [.. AnthropicFixtures.AllChecks().Take(3), AnthropicFixtures.Check("security", "concern", "Logs the token.", isSerious: true), .. AnthropicFixtures.AllChecks().Skip(4)],
+            [AnthropicFixtures.ChecklistFinding("security", "src/Retry.cs", 42, "Logs the token.", "Log the token's id instead.")]);
+        var reply = AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)], inputTokens: 1_000, outputTokens: 250, cacheReadTokens: 800, cacheCreationTokens: 50);
+        var sut = BuildSut(Respond(reply), TestOptions(isRefusalFallbackEnabled: isRefusalFallbackEnabled));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Detail.Should().BeNull();
+        result.Model.Should().Be(AnthropicFixtures.ModelId);
+        result.Attempts.Should().Equal(new ModelAttempt(AnthropicFixtures.ModelId, new ClaudeUsage(1_000, 250, 800, 50)));
+        result.Answer.Should().NotBeNull();
+        result.Answer!.Summary.Should().Be("Adds retries.");
+        result.Answer.Rated.Should().HaveCount(8);
+        result.Answer.Rated[CheckId.Security].Should().Be(new RatedCheck(CheckId.Security, CheckStatus.Concern, "Logs the token.", IsSerious: true));
+        result.Answer.Findings.Should().Equal(new ChecklistFinding(CheckId.Security, "src/Retry.cs", 42, "Logs the token.", "Log the token's id instead."));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReviewAsync_GivenARunRequest_Should_SendTheRequestedModelTheSchemaEffortAndACacheableSystemPrompt(bool isRefusalFallbackEnabled)
+    {
+        // Arrange — the configured model belongs to the old review; a run asks for the model its request names
+        var options = TestOptions(model: "claude-opus-5-5", maxOutputTokens: 32_000, effort: "high", isRefusalFallbackEnabled: isRefusalFallbackEnabled);
+
+        // Act
+        var captured = await CaptureRunRequestAsync(options);
+
+        // Assert
+        captured.Body.GetProperty("model").GetString().Should().Be("claude-sonnet-5-5");
+        captured.Body.GetProperty("max_tokens").GetInt32().Should().Be(32_000);
+        var outputConfig = captured.Body.GetProperty("output_config");
+        outputConfig.GetProperty("format").GetProperty("type").GetString().Should().Be("json_schema");
+        JsonNode.DeepEquals(JsonNode.Parse(outputConfig.GetProperty("format").GetProperty("schema").GetRawText()), JsonNode.Parse(ChecklistSchema.Json))
+            .Should().BeTrue("the schema sent is the checklist schema, whole and unchanged");
+        outputConfig.GetProperty("effort").GetString().Should().Be("high");
+        var system = captured.Body.GetProperty("system").EnumerateArray().Should().ContainSingle().Subject;
+        system.GetProperty("text").GetString().Should().Be("CHECKLIST RULES");
+        system.GetProperty("cache_control").GetProperty("type").GetString().Should().Be("ephemeral");
+        captured.RawBody.Should().NotContain("\"ttl\"", "the default five-minute cache is the one Claude:Pricing prices cache writes for");
+        UserText(captured.Body).Should().Be("PULL REQUEST INPUT");
+        captured.Body.TryGetProperty("tools", out _).Should().BeFalse();
+        captured.Body.TryGetProperty("thinking", out _).Should().BeFalse("current models think adaptively when it is left out, and refuse it turned off");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheFallbackEnabled_Should_CallTheBetaEndpointWithDefaultFallbacks()
+    {
+        // Arrange
+        var options = TestOptions(isRefusalFallbackEnabled: true);
+
+        // Act
+        var captured = await CaptureRunRequestAsync(options);
+
+        // Assert
+        BetasSent(captured.Message).Should().Contain("server-side-fallback-2026-07-01");
+        captured.Body.GetProperty("fallbacks").GetString().Should().Be("default");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheFallbackDisabled_Should_CallTheStandardEndpointWithoutFallbacks()
+    {
+        // Arrange
+        var options = TestOptions(isRefusalFallbackEnabled: false);
+
+        // Act
+        var captured = await CaptureRunRequestAsync(options);
+
+        // Assert
+        captured.Message.RequestUri!.AbsolutePath.Should().Be("/v1/messages");
+        captured.Message.RequestUri.Query.Should().NotContain("beta");
+        BetasSent(captured.Message).Should().BeEmpty();
+        captured.Body.TryGetProperty("fallbacks", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAFallbackBeforeAnyOutput_Should_ReportTheModelThatAnswered()
+    {
+        // Arrange — the requested model declined before writing anything, so the stream opens with the fallback model's name
+        var reply = AnthropicFixtures.Message(
+            [AnthropicFixtures.FallbackBlock("claude-sonnet-5-5", "claude-sonnet-5"), AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson())],
+            model: "claude-sonnet-5");
+        var sut = BuildSut(Respond(reply));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Model.Should().Be("claude-sonnet-5");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAFallbackMidStream_Should_JoinTheTextOnBothSidesOfTheFallbackBlock()
+    {
+        // Arrange — the requested model declined part way through the answer, and the fallback model wrote the rest after the block
+        var answer = AnthropicFixtures.ChecklistJson("Finished by the fallback model.");
+        var cut = answer.Length / 2;
+        var reply = AnthropicFixtures.Message(
+            [AnthropicFixtures.TextBlock(answer[..cut]), AnthropicFixtures.FallbackBlock("claude-sonnet-5-5", "claude-sonnet-5"), AnthropicFixtures.TextBlock(answer[cut..])]);
+        var sut = BuildSut(Respond(reply));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("Finished by the fallback model.");
+        result.Answer.Rated.Should().HaveCount(8);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAFallbackMidStream_Should_ReportTheFallbackModelThatServedTheAnswer()
+    {
+        // Arrange — the stream opened before the requested model declined, so its first event still names that model; the fallback block names
+        // the model that served the rest of the answer
+        var answer = AnthropicFixtures.ChecklistJson();
+        var cut = answer.Length / 2;
+        var reply = AnthropicFixtures.Message(
+            [AnthropicFixtures.TextBlock(answer[..cut]), AnthropicFixtures.FallbackBlock("claude-sonnet-5-5", "claude-sonnet-5"), AnthropicFixtures.TextBlock(answer[cut..])],
+            model: "claude-sonnet-5-5",
+            iterations:
+            [
+                AnthropicFixtures.Iteration("message", "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 150),
+                AnthropicFixtures.Iteration("fallback_message", "claude-sonnet-5", inputTokens: 1_150, outputTokens: 300)
+            ]);
+        var sut = BuildSut(Respond(reply));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Model.Should().Be("claude-sonnet-5");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenUsageIterations_Should_ReturnOneAttemptPerIterationWithItsModel()
+    {
+        // Arrange
+        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Attempts.Should().Equal(
+            new ModelAttempt("claude-sonnet-5-5", new ClaudeUsage(1_000, 20, 300, 50)),
+            new ModelAttempt("claude-sonnet-5", new ClaudeUsage(1_100, 400, 0, 900)));
+        result.TotalUsage.Should().Be(new ClaudeUsage(2_100, 420, 300, 950));
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheWholeChainRefused_Should_ReturnRefusedWithTheCategory()
+    {
+        // Arrange — the requested model declined, and so did the model it fell back to
+        var details = new { type = "refusal", category = "cyber", explanation = "Could enable cyber harm." };
+        var reply = AnthropicFixtures.Message(
+            [AnthropicFixtures.FallbackBlock("claude-sonnet-5-5", "claude-sonnet-5")],
+            stopReason: "refusal",
+            stopDetails: details,
+            model: "claude-sonnet-5",
+            iterations:
+            [
+                AnthropicFixtures.Iteration("message", "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 0),
+                AnthropicFixtures.Iteration("message", "claude-sonnet-5", inputTokens: 1_000, outputTokens: 0)
+            ]);
+        var sut = BuildSut(Respond(reply));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Refused);
+        result.Detail.Should().Be("cyber");
+        result.Answer.Should().BeNull();
+        result.Attempts.Should().HaveCount(2, "both declined attempts are part of what the run cost");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARefusalWithTheFallbackDisabled_Should_ReturnRefusedWithTheCategory()
+    {
+        // Arrange
+        var details = new { type = "refusal", category = "bio", explanation = "Could enable biological harm." };
+        var reply = AnthropicFixtures.Message([], stopReason: "refusal", stopDetails: details);
+        var sut = BuildSut(Respond(reply), TestOptions(isRefusalFallbackEnabled: false));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Refused);
+        result.Detail.Should().Be("bio");
+        result.Answer.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("max_tokens", "output limit reached")]
+    [InlineData("model_context_window_exceeded", "context window exceeded")]
+    public async Task ReviewAsync_GivenTheOutputLimitOrContextWindow_Should_ReturnOutputTruncated(string stopReason, string expectedDetail)
+    {
+        // Arrange — the answer is cut mid-JSON, as it is when the output limit or the context window runs out
+        var truncated = AnthropicFixtures.ChecklistJson()[..60];
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(truncated)], stopReason: stopReason)));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.OutputTruncated);
+        result.Detail.Should().Be(expectedDetail);
+        result.Answer.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAnAnswerThatRatesNoCheck_Should_ReturnInvalidOutput()
+    {
+        // Arrange — JSON of the right shape whose checks list is empty: a run that assessed nothing must not give a verdict
+        var answer = AnthropicFixtures.ChecklistJson(checks: []);
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)])));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.InvalidOutput);
+        result.Detail.Should().Be("The answer rated none of the eight checks.");
+        result.Answer.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("", "The answer was empty.")]
+    [InlineData("   ", "The answer was empty.")]
+    [InlineData("{ \"summary\": ", "The answer was not valid JSON.")]
+    [InlineData("Looks good to me.", "The answer was not valid JSON.")]
+    [InlineData("[\"pass\", \"pass\"]", "The answer was not a JSON object.")]
+    [InlineData("{\"summary\":\"s\",\"checks\":[{\"id\":\"not-a-check\",\"status\":\"pass\",\"note\":\"\",\"serious\":false}],\"findings\":[],\"coverage_note\":\"\"}", "The answer rated none of the eight checks.")]
+    public async Task ReviewAsync_GivenAnAnswerTheReaderCannotUse_Should_ReturnInvalidOutputWithTheReadersReason(string answer, string expectedDetail)
+    {
+        // Arrange — the reader's fifth reason, text that is not valid Unicode, cannot come this far: the SDK refuses such a stream before there is
+        // an answer to read (AnthropicSdkContractTests)
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)])));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.InvalidOutput);
+        result.Detail.Should().Be(expectedDetail);
+        result.Answer.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(400)]
+    [InlineData(413)]
+    [InlineData(422)]
+    public async Task ReviewAsync_GivenTheRequestIsRefusedAsInvalid_Should_ReturnRejected(int status)
+    {
+        // Arrange — the same request would be refused on every attempt, so this ends the run instead of failing it for a retry
+        var sut = BuildSut(Respond(AnthropicFixtures.Error((HttpStatusCode)status, "invalid_request_error", "prompt is too long")));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Rejected);
+        result.Detail.Should().Be($"HTTP {status}: prompt is too long");
+        result.Model.Should().BeEmpty("no model ran, so none answered");
+        result.Attempts.Should().BeEmpty("nothing ran, so nothing was spent");
+        result.Answer.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAnOverloadedStream_Should_Throw()
+    {
+        // Arrange — the API reports an overload inside a stream that already started with a 200
+        var sut = BuildSut(Respond(AnthropicFixtures.StreamWithAnErrorEvent()));
+
+        // Act
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        var failure = (await act.Should().ThrowAsync<Exception>()).Which;
+        FailureClassifier.IsTransient(failure).Should().BeTrue($"{failure.GetType().Name} is a dropped stream, which the queue retries");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARunWhoseStreamNeverReportsAStopReason_Should_FailWithAnErrorThatIsWorthRetrying()
+    {
+        // Arrange — text that reads as an answer is no proof the reply was whole when the model never said why it stopped
+        var sut = BuildSut(Respond(AnthropicFixtures.StreamWithoutAStopReason()));
+
+        // Act
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        var failure = (await act.Should().ThrowAsync<Exception>()).Which;
+        FailureClassifier.IsTransient(failure).Should().BeTrue($"{failure.GetType().Name} is a reply that did not finish properly");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARunWhoseReplyStallsAfterItStarts_Should_ThrowATimeoutWhenTheBudgetRunsOut()
+    {
+        // Arrange
+        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var time = new FakeTimeProvider();
+        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
+
+        // Act
+        var run = sut.ReviewAsync(_runRequest, CancellationToken.None);
+        await stalled.Task.WaitAsync(_hangGuard);
+        time.Advance(TimeSpan.FromSeconds(31));
+        var act = () => run.WaitAsync(_hangGuard);
+
+        // Assert
+        (await act.Should().ThrowAsync<TimeoutException>()).Which.Message.Should().Contain("within the 30-second limit");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenAFinishedRun_Should_CountItByOutcomeAndModel()
+    {
+        // Arrange — answered by the fallback model, which is the model the run is counted for
+        using var metrics = new MetricsRecorder();
+        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()));
+
+        // Act
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        metrics.Sum("github_review_app.review.runs").Should().Be(1);
+        metrics.Sum("github_review_app.review.runs", ("outcome", "Completed"), ("model", "claude-sonnet-5")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARejectedRun_Should_CountItUnderTheModelItAskedFor()
+    {
+        // Arrange — no model answered a request the service refused, so the count names the model that was asked
+        using var metrics = new MetricsRecorder();
+        var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "prompt is too long")));
+
+        // Act
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        metrics.Sum("github_review_app.review.runs", ("outcome", "Rejected"), ("model", "claude-sonnet-5-5")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenUsageIterations_Should_RecordTheTokensOfEveryAttemptInTheTokenMetrics()
+    {
+        // Arrange
+        using var metrics = new MetricsRecorder();
+        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()));
+
+        // Act
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        metrics.Sum("gen_ai.usage.input_tokens").Should().Be(2_100);
+        metrics.Sum("gen_ai.usage.output_tokens").Should().Be(420);
+        metrics.Sum("gen_ai.usage.cache_read_input_tokens").Should().Be(300);
+        metrics.Sum("gen_ai.usage.cache_creation_input_tokens").Should().Be(950);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARunAnsweredByAFallbackModel_Should_TagTheSpanWithTheRequestedAndTheAnsweringModel()
+    {
+        // Arrange — the configured model belongs to the old review, so the requested model can only come from the run's request
+        using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
+        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()), TestOptions(model: "claude-opus-5-5", maxOutputTokens: 32_000));
+
+        // Act
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        var span = spans.Spans.Should().ContainSingle().Subject;
+        span.GetTagItem("gen_ai.request.model").Should().Be("claude-sonnet-5-5");
+        span.GetTagItem("gen_ai.response.model").Should().Be("claude-sonnet-5");
+        span.GetTagItem("gen_ai.request.max_tokens").Should().Be(32_000);
+        span.GetTagItem("gen_ai.usage.input_tokens").Should().Be(2_100L);
+        span.Status.Should().NotBe(ActivityStatusCode.Error);
+    }
+
+    [Theory]
+    [InlineData("refusal")]
+    [InlineData("max_tokens")]
+    [InlineData("model_context_window_exceeded")]
+    [InlineData("end_turn")]
+    public async Task ReviewAsync_GivenARunThatDidNotComplete_Should_MarkTheSpanAsAnError(string stopReason)
+    {
+        // Arrange — with end_turn the text is not an answer, so the run ends with invalid output
+        using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock("{\"summ")], stopReason: stopReason)));
+
+        // Act
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        spans.Spans.Should().ContainSingle().Which.Status.Should().Be(ActivityStatusCode.Error);
     }
 }

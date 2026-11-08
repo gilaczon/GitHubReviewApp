@@ -1,4 +1,5 @@
 global using Anthropic.Exceptions;
+global using BetaMessages = Anthropic.Models.Beta.Messages;
 global using FluentAssertions;
 global using GitHubReviewApp.Configuration;
 global using GitHubReviewApp.Telemetry;

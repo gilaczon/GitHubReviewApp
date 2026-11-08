@@ -85,6 +85,23 @@ public class AnthropicFixturesTests
     }
 
     [Fact]
+    public async Task Message_GivenIterations_Should_SendThemOnlyInTheFinalDelta()
+    {
+        // Arrange — the SDK contract test relies on this: it proves the SDK reads the attempts from the final delta, which it could not if they
+        // also came in the first event
+        var response = AnthropicFixtures.Message(iterations: [AnthropicFixtures.Iteration("fallback_message", "claude-sonnet-5", inputTokens: 1_100, outputTokens: 400)]);
+
+        // Act
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Assert
+        var start = body[..body.IndexOf("event: content_block_start", StringComparison.Ordinal)];
+        var final = body[body.IndexOf("event: message_delta", StringComparison.Ordinal)..];
+        start.Should().NotContain("iterations");
+        final.Should().Contain("\"iterations\":[{\"type\":\"fallback_message\",\"model\":\"claude-sonnet-5\",\"input_tokens\":1100,\"output_tokens\":400");
+    }
+
+    [Fact]
     public async Task Message_GivenBytesPerRead_Should_HandOutOnlyThatManyBytesPerReadAndTheWholeReplyInTheEnd()
     {
         // Arrange
