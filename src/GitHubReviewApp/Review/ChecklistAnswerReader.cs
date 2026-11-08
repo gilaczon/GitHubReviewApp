@@ -123,7 +123,7 @@ public static class ChecklistAnswerReader
 
         // Only the boolean true counts; "true", 1 and null do not.
         var isSerious = status == CheckStatus.Concern
-            && entry.TryGetProperty("serious", out var serious)
+            && TryGetProperty(entry, "serious", out var serious)
             && serious.ValueKind == JsonValueKind.True;
 
         return new RatedCheck(id, status, note, isSerious);
@@ -170,8 +170,9 @@ public static class ChecklistAnswerReader
 
     private static int ReadLine(JsonElement entry)
     {
-        // Only a whole number that fits is a line. "42", 4.5 and null are 0, which the comment shows as no line.
-        return entry.TryGetProperty("line", out var line) && line.ValueKind == JsonValueKind.Number && line.TryGetInt32(out var number)
+        // Only a whole number that fits is a line. "42", 4.5 and null are 0, and so is any number below 1: the comment shows 0 as no line,
+        // and the merge, which compares lines, must not take -1 and 0 for two different ones.
+        return TryGetProperty(entry, "line", out var line) && line.ValueKind == JsonValueKind.Number && line.TryGetInt32(out var number) && number > 0
             ? number
             : 0;
     }
@@ -179,15 +180,49 @@ public static class ChecklistAnswerReader
     private static IEnumerable<JsonElement> ObjectsIn(JsonElement owner, string propertyName)
     {
         // A list of the wrong kind reads as an empty list, and an entry that is not an object is dropped.
-        return owner.TryGetProperty(propertyName, out var list) && list.ValueKind == JsonValueKind.Array
+        return TryGetProperty(owner, propertyName, out var list) && list.ValueKind == JsonValueKind.Array
             ? list.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.Object)
             : [];
+    }
+
+    private static bool TryGetProperty(JsonElement owner, string propertyName, out JsonElement value)
+    {
+        // Not JsonElement.TryGetProperty: that unescapes the names it compares and throws when one is the JSON escape of half a surrogate
+        // pair, even though the property asked for is in the object too. A name that cannot be read is skipped here as if it were absent,
+        // so the other properties are still found. Like TryGetProperty, the last of two properties with the same name wins.
+        var isFound = false;
+
+        value = default;
+
+        foreach (var property in owner.EnumerateObject())
+        {
+            if (IsNamed(property, propertyName))
+            {
+                value = property.Value;
+                isFound = true;
+            }
+        }
+
+        return isFound;
+    }
+
+    private static bool IsNamed(JsonProperty property, string propertyName)
+    {
+        try
+        {
+            return property.NameEquals(propertyName);
+        }
+        catch (InvalidOperationException)
+        {
+            // Thrown when the name is the JSON escape of half a surrogate pair. Such a name holds no valid text, so it is no one's name.
+            return false;
+        }
     }
 
     private static string ReadText(JsonElement owner, string propertyName)
     {
         // A value of the wrong kind reads as empty text.
-        if (!owner.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
+        if (!TryGetProperty(owner, propertyName, out var value) || value.ValueKind != JsonValueKind.String)
         {
             return string.Empty;
         }

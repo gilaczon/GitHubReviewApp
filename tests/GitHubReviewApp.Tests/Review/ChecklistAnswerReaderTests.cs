@@ -312,6 +312,51 @@ public class ChecklistAnswerReaderTests
     }
 
     [Fact]
+    public void Read_GivenARootPropertyNamedWithHalfASurrogatePair_Should_StillReadTheChecks()
+    {
+        // Arrange — the name is valid JSON but stands for no valid UTF-16 text, and JsonElement.TryGetProperty throws while comparing it
+        var text = $$"""{"summary":"Adds retries.","checks":{{AllEight()}},"findings":[],"coverage_note":"","{{Backslash}}ud800xyz":1}""";
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert — the property is ignored as if it were absent, and every other property is read
+        result.Error.Should().BeNull();
+        result.Answer!.Rated.Should().HaveCount(8);
+        result.Answer.Rated.Values.Should().OnlyContain(check => check.Status == CheckStatus.Pass);
+        result.Answer.Summary.Should().Be("Adds retries.");
+    }
+
+    [Fact]
+    public void Read_GivenACheckPropertyNamedWithHalfASurrogatePair_Should_StillReadTheCheck()
+    {
+        // Arrange — JsonElement.TryGetProperty throws only for a bad name that begins as the name it looks up does and is longer than it, so
+        // there is one for "id" (and so for ReadText) and one for "serious"; both come after the properties that are read
+        var entry = $$"""{"id":"security","status":"concern","note":"Logs the token.","i{{Backslash}}ud800":1,"se{{Backslash}}ud800":1}""";
+        var text = Answer(Entries(entry));
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert
+        result.Answer!.Rated.Should().BeEquivalentTo(Ratings(new RatedCheck(CheckId.Security, CheckStatus.Concern, "Logs the token.", false)));
+    }
+
+    [Fact]
+    public void Read_GivenAFindingPropertyNamedWithHalfASurrogatePair_Should_StillReadTheFinding()
+    {
+        // Arrange — one bad name begins as "check" does (for ReadText) and one as "line" does, and both come after the properties that are read
+        var entry = $$"""{"check":"functionality","file":"src/Foo.cs","line":11,"issue":"Retries twice.","fix":"Retry once.","c{{Backslash}}ud800":1,"l{{Backslash}}ud800":1}""";
+        var text = Answer(AllEight(), Entries(entry));
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert
+        result.Answer!.Findings.Should().Equal(new ChecklistFinding(CheckId.Functionality, "src/Foo.cs", 11, "Retries twice.", "Retry once."));
+    }
+
+    [Fact]
     public void Read_GivenAnOverlongSummaryAndCoverageNote_Should_CutThemTo240And160Characters()
     {
         // Arrange — one character over each limit
@@ -471,6 +516,19 @@ public class ChecklistAnswerReaderTests
         var result = ChecklistAnswerReader.Read(text);
 
         // Assert — 0 is no line, so the comment shows the file alone
+        result.Answer!.Findings.Should().Equal(new ChecklistFinding(CheckId.Functionality, "src/Foo.cs", 0, "Retries twice.", "Retry once."));
+    }
+
+    [Fact]
+    public void Read_GivenAFindingWithANegativeLine_Should_KeepItWithLineZero()
+    {
+        // Arrange
+        var text = Answer(AllEight(), Entries(Finding(line: "-7")));
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert — a line below 1 is no line, as 0 is, so the comment shows the file alone and the merge compares one kind of "no line"
         result.Answer!.Findings.Should().Equal(new ChecklistFinding(CheckId.Functionality, "src/Foo.cs", 0, "Retries twice.", "Retry once."));
     }
 
