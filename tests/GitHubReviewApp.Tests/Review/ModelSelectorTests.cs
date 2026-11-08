@@ -180,7 +180,8 @@ public class ModelSelectorTests
         return new PullRequestInfo("open", false, "Add retries", HeadSha, BaseSha, 1, additions, deletions);
     }
 
-    // One changed file, in the risk tier the classifier gives its path.
+    // One changed file, in the risk tier the classifier gives its path. Every file is marked Included, even a lockfile the builder would mark
+    // Lockfile: the selector reads only the tier, so the inclusion cannot change its choice.
     private static ReviewInput InputOf(string path)
     {
         var file = new PullRequestFile(path, "modified", 1, 0, "@@ -1 +1 @@\n-a\n+b");
