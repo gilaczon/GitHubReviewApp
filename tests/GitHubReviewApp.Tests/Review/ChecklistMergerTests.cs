@@ -1,9 +1,10 @@
 namespace GitHubReviewApp.Tests.Review;
 
 /// <summary>
-/// Merging the runs of one review (design 5.7): each check takes the stricter rating, with the note of a serious run first; a check no run
-/// rated is not assessed; findings appear once each, the stricter run's first; the summary and coverage note are the stricter run's; and the
-/// runs agreed only when both rated every check with the same status.
+/// Merging the runs of one review (design 5.7): each check takes the stricter rating, with the real note of a serious run first (the
+/// "Not assessed" placeholder is no note, and is kept only when no run wrote a real one); a check no run rated is not assessed; findings
+/// appear once each, the stricter run's first; the summary and coverage note are the stricter run's; and the runs agreed only when both
+/// rated every check with the same status.
 /// </summary>
 public class ChecklistMergerTests
 {
@@ -70,6 +71,50 @@ public class ChecklistMergerTests
         // Assert
         merged.Checks.Single(check => check.Id == CheckId.Security)
             .Should().Be(new RatedCheck(CheckId.Security, CheckStatus.Fail, "Logs the access token.", false));
+    }
+
+    [Fact]
+    public void Merge_GivenTwoConcernsWhereRunAHasOnlyThePlaceholder_Should_TakeRunBsNote()
+    {
+        // Arrange — the reader gives a concern without a note the placeholder, which stands for "no note"
+        var runA = Run((CheckId.Testing, CheckStatus.Concern, Checklist.NotAssessedNote, false));
+        var runB = Run((CheckId.Testing, CheckStatus.Concern, "No test for the failure path.", false));
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — run B's real note, though run A comes first
+        merged.Checks.Single(check => check.Id == CheckId.Testing)
+            .Should().Be(new RatedCheck(CheckId.Testing, CheckStatus.Concern, "No test for the failure path.", false));
+    }
+
+    [Fact]
+    public void Merge_GivenASeriousConcernWithThePlaceholderAndAPlainConcernWithANote_Should_KeepTheRealNoteAndStaySerious()
+    {
+        // Arrange — the serious run assessed the check but wrote no note
+        var runA = Run((CheckId.Functionality, CheckStatus.Concern, Checklist.NotAssessedNote, true));
+        var runB = Run((CheckId.Functionality, CheckStatus.Concern, "Retries can post the same refund twice.", false));
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — the placeholder does not make the note "SERIOUS: Not assessed by the reviewer." for a check both runs assessed
+        merged.Checks.Single(check => check.Id == CheckId.Functionality)
+            .Should().Be(new RatedCheck(CheckId.Functionality, CheckStatus.Concern, "Retries can post the same refund twice.", true));
+    }
+
+    [Fact]
+    public void Merge_GivenTwoConcernsWithOnlyThePlaceholder_Should_KeepThePlaceholder()
+    {
+        // Arrange
+        var runA = Run((CheckId.Testing, CheckStatus.Concern, Checklist.NotAssessedNote, false));
+        var runB = Run((CheckId.Testing, CheckStatus.Concern, Checklist.NotAssessedNote, false));
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — no run wrote a real note, so the spec's stand-in stays
+        merged.Checks.Single(check => check.Id == CheckId.Testing).Should().Be(NotAssessed(CheckId.Testing));
     }
 
     [Fact]

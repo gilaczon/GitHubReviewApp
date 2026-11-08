@@ -58,8 +58,11 @@ public static class ChecklistMerger
         var status = ratings.Max(rating => rating.Status);
         var holders = ratings.Where(rating => rating.Status == status).ToList();
 
-        // A serious run's note first, then the first note given, run A's before run B's.
-        var note = holders.FirstOrDefault(rating => rating.IsSerious && rating.Note.Length > 0)?.Note
+        // A serious run's real note first, then the first real note given, run A's before run B's. The placeholder the reader gives a concern
+        // with no note stands for "no note", so it is kept only when no run that holds the status wrote a real one: any note left after the
+        // two real-note steps is that placeholder, and with no note at all the merged note is empty.
+        var note = holders.FirstOrDefault(rating => rating.IsSerious && IsRealNote(rating.Note))?.Note
+            ?? holders.FirstOrDefault(rating => IsRealNote(rating.Note))?.Note
             ?? holders.FirstOrDefault(rating => rating.Note.Length > 0)?.Note
             ?? string.Empty;
 
@@ -67,6 +70,11 @@ public static class ChecklistMerger
         var isSerious = status == CheckStatus.Concern && holders.Any(rating => rating.IsSerious);
 
         return new RatedCheck(id, status, note, isSerious);
+    }
+
+    private static bool IsRealNote(string note)
+    {
+        return note.Length > 0 && !string.Equals(note, Checklist.NotAssessedNote, StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<ChecklistFinding> MergeFindings(RunAnswer stricterRun, RunAnswer? otherRun)
