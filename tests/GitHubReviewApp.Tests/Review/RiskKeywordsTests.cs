@@ -1,13 +1,14 @@
 namespace GitHubReviewApp.Tests.Review;
 
 /// <summary>
-/// The words of a path or repository name (design 5.3): split at every character that is not a letter or digit and at camelCase and acronym
-/// boundaries, lower-cased; and the first high-risk tier, in enum order, that has one of those words as a keyword. Whole words only.
+/// The words of a path or repository name (design 5.3): split at every character that is not a letter or digit, at camelCase and acronym
+/// boundaries and where letters and digits meet, lower-cased; and the first high-risk tier, in enum order, that has one of those words, or one of
+/// them without a plural "s", as a keyword. Whole words only.
 /// </summary>
 public class RiskKeywordsTests
 {
     [Theory]
-    [InlineData("src/OpenBanking/BankStatementParser_v2.cs", "src open banking bank statement parser v2 cs")]
+    [InlineData("src/OpenBanking/BankStatementParser_v2.cs", "src open banking bank statement parser v 2 cs")]
     [InlineData("PayIDAlias.cs", "pay id alias cs")]
     [InlineData("ParseJWT", "parse jwt")]
     [InlineData("XMLHttpRequest", "xml http request")]
@@ -16,6 +17,26 @@ public class RiskKeywordsTests
     public void Tokenize_GivenAPathWithSeparatorsAndCamelCase_Should_SplitIntoLowerCaseWords(string text, string expectedWords)
     {
         // Arrange
+        var expected = expectedWords.Split(' ');
+
+        // Act
+        var tokens = RiskKeywords.Tokenize(text);
+
+        // Assert
+        tokens.Should().Equal(expected);
+    }
+
+    [Theory]
+    [InlineData("OAuth2Client", "o auth 2 client")]
+    [InlineData("V2PaymentsController", "v 2 payments controller")]
+    [InlineData("oauth2-proxy", "oauth 2 proxy")]
+    [InlineData("JWTsValidator", "jwts validator")]
+    [InlineData("JWTs", "jwts")]
+    [InlineData("JWTs2", "jwts 2")]
+    [InlineData("APIService", "api service")]
+    public void Tokenize_GivenDigitsOrAPluralAcronym_Should_MakeEachDigitRunAWordAndKeepThePluralS(string text, string expectedWords)
+    {
+        // Arrange — the "s" stays with an acronym when it ends the word or another word or a number follows it; "APIService" has no plural
         var expected = expectedWords.Split(' ');
 
         // Act
@@ -53,6 +74,39 @@ public class RiskKeywordsTests
 
         // Assert
         tier.Should().Be(RiskTier.Auth);
+    }
+
+    [Theory]
+    [InlineData("src/OAuth2Client.cs", RiskTier.Auth)]
+    [InlineData("src/Auth0Service.cs", RiskTier.Auth)]
+    [InlineData("src/Pbkdf2PasswordHasher.cs", RiskTier.Auth)]
+    [InlineData("src/Aes256CardEncryptor.cs", RiskTier.Cards)]
+    [InlineData("src/V2PaymentsController.cs", RiskTier.Payments)]
+    [InlineData("src/JWTsValidator.cs", RiskTier.Auth)]
+    [InlineData("src/Audit/Logins.cs", RiskTier.Auth)]
+    public void MatchHighRiskTier_GivenAKeywordBesideDigitsOrWithAPluralS_Should_ReturnItsTier(string path, RiskTier expectedTier)
+    {
+        // Arrange — each path holds a keyword only once its digits are split off ("Auth0") or a plural "s" is dropped ("jwts", "logins")
+
+        // Act
+        var tier = RiskKeywords.MatchHighRiskTier(path);
+
+        // Assert
+        tier.Should().Be(expectedTier);
+    }
+
+    [Theory]
+    [InlineData("src/Utf8JsonReader.cs")]
+    [InlineData("src/Base64Encoder.cs")]
+    public void MatchHighRiskTier_GivenWordsBesideDigitsThatAreNoKeywords_Should_ReturnNull(string path)
+    {
+        // Arrange — split off its digits, each word is still none of the keywords
+
+        // Act
+        var tier = RiskKeywords.MatchHighRiskTier(path);
+
+        // Assert
+        tier.Should().BeNull();
     }
 
     [Theory]

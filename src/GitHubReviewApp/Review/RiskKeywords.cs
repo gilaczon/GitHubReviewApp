@@ -2,9 +2,9 @@ namespace GitHubReviewApp.Review;
 
 /// <summary>
 /// Finds the high-risk area a path or a repository name belongs to from the words in it (design 5.3). The text is split into lower-case words
-/// at every character that is not a letter or digit and at camelCase boundaries, and a tier matches when one of those words is one of its
-/// keywords. Only whole words count: "Spanner" is not "pan", and "Tokenizer" is not "token". The keyword lists are a starting set, tuned here
-/// with tests.
+/// at every character that is not a letter or digit, at camelCase boundaries and where letters and digits meet, and a tier matches when one of
+/// those words is one of its keywords, or is one with a plural "s" added. Only whole words count: "Spanner" is not "pan", and "Tokenizer" is
+/// not "token". The keyword lists are a starting set, tuned here with tests.
 /// </summary>
 public static class RiskKeywords
 {
@@ -47,8 +47,10 @@ public static class RiskKeywords
 
     /// <summary>
     /// The words of <paramref name="text"/>, lower-cased: split at every character that is not a letter or digit, then where a lower-case letter
-    /// is followed by an upper-case one ("openBanking"), and where an acronym runs into the next word, before that word's capital ("IDAlias" is
-    /// "ID" and "Alias"). A digit is part of the word it is in ("v2").
+    /// is followed by an upper-case one ("openBanking"), where an acronym runs into the next word, before that word's capital ("IDAlias" is
+    /// "ID" and "Alias"), and where a letter and a digit meet, so a run of digits is a word of its own ("Pbkdf2Hasher" is "Pbkdf", "2" and
+    /// "Hasher"). An acronym keeps a plural "s" that ends the word or is followed by another word or a number ("JWTsValidator" is "JWTs" and
+    /// "Validator").
     /// </summary>
     public static IReadOnlyList<string> Tokenize(string text)
     {
@@ -75,7 +77,8 @@ public static class RiskKeywords
 
     /// <summary>
     /// The first of auth, payments, cards, bank login and personal data, in that order, that has a keyword among the words of
-    /// <paramref name="text"/>; null when none does.
+    /// <paramref name="text"/>; null when none does. A word that ends in "s" also counts when it is a keyword without that one "s" ("jwts" is
+    /// "jwt", "logins" is "login").
     /// </summary>
     public static RiskTier? MatchHighRiskTier(string text)
     {
@@ -83,13 +86,18 @@ public static class RiskKeywords
 
         foreach (var tier in _highRiskTiers)
         {
-            if (tokens.Any(tier.Keywords.Contains))
+            if (tokens.Any(token => IsKeywordOrItsPlural(tier.Keywords, token)))
             {
                 return tier.Tier;
             }
         }
 
         return null;
+    }
+
+    private static bool IsKeywordOrItsPlural(HashSet<string> keywords, string token)
+    {
+        return keywords.Contains(token) || (token.EndsWith('s') && keywords.Contains(token[..^1]));
     }
 
     private static void AddWordParts(List<string> tokens, string word)
@@ -114,8 +122,18 @@ public static class RiskKeywords
         var current = word[index];
 
         var isLowerThenUpper = char.IsLower(previous) && char.IsUpper(current);
-        var isWordAfterAcronym = char.IsUpper(previous) && char.IsUpper(current) && index + 1 < word.Length && char.IsLower(word[index + 1]);
+        var isLetterDigitBoundary = char.IsDigit(previous) != char.IsDigit(current);
+        var isWordAfterAcronym = char.IsUpper(previous) && char.IsUpper(current) && index + 1 < word.Length && char.IsLower(word[index + 1])
+            && !IsPluralOfAcronym(word, index + 1);
 
-        return isLowerThenUpper || isWordAfterAcronym;
+        return isLowerThenUpper || isLetterDigitBoundary || isWordAfterAcronym;
+    }
+
+    // The "s" of "JWTs" and "JWTsValidator": a lone "s" after an acronym that ends the word or is followed by another word or a number.
+    private static bool IsPluralOfAcronym(string word, int index)
+    {
+        var isEndOfWord = index + 1 == word.Length;
+
+        return word[index] == 's' && (isEndOfWord || char.IsUpper(word[index + 1]) || char.IsDigit(word[index + 1]));
     }
 }
