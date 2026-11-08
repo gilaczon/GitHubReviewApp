@@ -21,10 +21,17 @@ public static class ChecklistVerdict
 
     /// <summary>
     /// The verdict of the eight checks, as <see cref="Complete"/> or the merge gives them, with the number of serious concerns. The count is
-    /// named in the headline and never changes the verdict.
+    /// named in the headline and never changes the verdict. A list that is not the eight checks, each once, could give a PASS in which a check
+    /// was not assessed, so it is refused; the order of the list is not checked.
     /// </summary>
+    /// <exception cref="ArgumentException">The list does not hold each of the eight checks exactly once.</exception>
     public static ReviewOutcome Derive(IReadOnlyList<RatedCheck> checks)
     {
+        if (Checklist.Order.Any(id => checks.Count(check => check.Id == id) != 1))
+        {
+            throw new ArgumentException("A verdict needs each of the eight checks rated exactly once.", nameof(checks));
+        }
+
         // Serious is a flag on a concern, so a flag on any other status is not counted.
         var seriousCount = checks.Count(check => check.Status == CheckStatus.Concern && check.IsSerious);
 

@@ -2,7 +2,8 @@ namespace GitHubReviewApp.Tests.Review;
 
 /// <summary>
 /// Deriving the verdict from the eight check ratings (design 5.7): only a Security fail fails a review, any concern or fail asks for
-/// comments, a serious concern is counted but never changes the verdict, and a check that was not assessed is a concern, never a pass.
+/// comments, a serious concern is counted but never changes the verdict, a check that was not assessed is a concern, never a pass, and a list
+/// that is not the eight checks, each once, is refused.
 /// </summary>
 public class ChecklistVerdictTests
 {
@@ -118,6 +119,31 @@ public class ChecklistVerdictTests
 
         // Assert
         outcome.Should().Be(new ReviewOutcome(ReviewVerdict.Pass, 0));
+    }
+
+    [Fact]
+    public void Derive_GivenSevenChecks_Should_ThrowArgumentException()
+    {
+        // Arrange — seven passes would be a PASS in which a check, Security among them, was not assessed
+        var checks = Checks().Take(7).ToList();
+
+        // Act & Assert
+        var act = () => ChecklistVerdict.Derive(checks);
+        act.Should().Throw<ArgumentException>().WithParameterName("checks");
+    }
+
+    [Fact]
+    public void Derive_GivenACheckTwiceAndOneMissing_Should_ThrowArgumentException()
+    {
+        // Arrange — eight ratings, but Security is rated twice and Dependencies not at all
+        var checks = Checks()
+            .Where(check => check.Id != CheckId.Dependencies)
+            .Append(new RatedCheck(CheckId.Security, CheckStatus.Pass, "", false))
+            .ToList();
+
+        // Act & Assert
+        var act = () => ChecklistVerdict.Derive(checks);
+        act.Should().Throw<ArgumentException>().WithParameterName("checks");
     }
 
     [Fact]
