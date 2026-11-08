@@ -35,7 +35,7 @@ public static class Checklist
         return _entries.Single(entry => entry.Id == id).Label;
     }
 
-    /// <summary>Finds the check a wire id names. The match is exact and case-sensitive, so "Security" and "security " name no check.</summary>
+    /// <summary>Finds the check a wire id names. The match is exact and case-sensitive, so "Security" and "security " name no check. When nothing matches, <paramref name="id"/> holds no meaningful value.</summary>
     public static bool TryParse(string? wireId, out CheckId id)
     {
         var entry = _entries.FirstOrDefault(candidate => string.Equals(candidate.WireId, wireId, StringComparison.Ordinal));
