@@ -2,7 +2,7 @@ namespace GitHubReviewApp.Models;
 
 /// <summary>
 /// How much is at stake in a changed file (design 5.3). Declared in listing order: the review lists and sends files in this order, highest risk
-/// first, so when the diff budget runs out it is the lower tiers that are left out.
+/// first, so the diff budget goes to the higher tiers first.
 /// </summary>
 public enum RiskTier
 {

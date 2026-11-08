@@ -8,7 +8,7 @@ namespace GitHubReviewApp.Review;
 public sealed class ReviewInputBuilder
 {
     // A cut slice smaller than this is too little of the file to review, so the file is left out instead.
-    private const int MinimumPartialBytes = 2_000;
+    private const int MinimumUsefulPartialBytes = 2_000;
 
     private readonly ReviewOptions _options;
 
@@ -62,7 +62,7 @@ public sealed class ReviewInputBuilder
                 var rendered = DiffRenderer.Render(file, _options.MaxFileBytes);
                 var renderedBytes = rendered.RenderedBytes;
                 var isOverBudget = renderedBytes + 1 > _options.MaxDiffBytes - usedBytes;
-                var isTooSmallASlice = rendered.IsPartial && renderedBytes < MinimumPartialBytes;
+                var isTooSmallASlice = rendered.IsPartial && renderedBytes < MinimumUsefulPartialBytes;
 
                 if (isOverBudget || isTooSmallASlice)
                 {

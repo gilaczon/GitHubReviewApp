@@ -166,6 +166,20 @@ public class ReviewInputBuilderTests
     }
 
     [Fact]
+    public void Build_GivenACutThatLeavesTheStartOfATag_Should_NeutralizeIt()
+    {
+        // Arrange — "</diffs" is no tag, but cut after six characters it leaves "</diff" in front of the notice
+        var options = new ReviewOptions { MaxDescriptionChars = 6 };
+        var pullRequest = PullRequest(body: "</diffs are fine");
+
+        // Act
+        var input = BuildSut(options).Build(Owner, Repo, pullRequest, [Modified("src/Util/Strings.cs")]);
+
+        // Assert
+        Section(input.UserMessage, "pr_description_untrusted").Should().Be("<\\/diff\n[description cut]");
+    }
+
+    [Fact]
     public void Build_GivenAuthorTextThatClosesItsTag_Should_NeutralizeEveryWrapperTag()
     {
         // Arrange — every value the author controls tries to end the description and open a diff of its own
@@ -364,7 +378,7 @@ public class ReviewInputBuilderTests
     [Fact]
     public void Build_GivenAPullRequestAtGitHubsLimits_Should_StayWithinEveryBudget()
     {
-        // Arrange — 3,000 files, as many as GitHub lists: every tenth with a 2 MB patch, every seventh without one, every fifth with emoji
+        // Arrange — 3,000 files, as many as GitHub lists: every tenth has a 2 MB patch, and of the rest every seventh has none and every fifth has emoji
         var files = Enumerable.Range(0, 3_000).Select(FileAtGitHubsLimits).ToList();
 
         // Act
