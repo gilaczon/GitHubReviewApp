@@ -53,6 +53,16 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         RequireAtMost(failures, "MaxGuidelinesChars", options.MaxGuidelinesChars, MaxGuidelinesCharsCap);
         RequireAtLeast(failures, "MaxReviewDurationSeconds", options.MaxReviewDurationSeconds, 1);
         RequireAtMost(failures, "MaxReviewDurationSeconds", options.MaxReviewDurationSeconds, MaxReviewDurationSecondsCap);
+        RequireAtLeast(failures, "MaxDiffBytes", options.MaxDiffBytes, 1);
+        RequireAtLeast(failures, "MaxListedFiles", options.MaxListedFiles, 1);
+        RequireAtLeast(failures, "MaxDescriptionChars", options.MaxDescriptionChars, 1);
+
+        if (options.MaxFileBytes > options.MaxDiffBytes)
+        {
+            failures.Add(
+                $"Review:MaxFileBytes is {options.MaxFileBytes}, which is more than the {options.MaxDiffBytes} bytes of Review:MaxDiffBytes. A file cut " +
+                "to that size could be larger than the whole diff, and would then be left out where a smaller cut would have fitted.");
+        }
 
         if (_claudeOptions?.Value is { } claude && options.MaxReviewDurationSeconds < claude.RequestTimeoutSeconds)
         {

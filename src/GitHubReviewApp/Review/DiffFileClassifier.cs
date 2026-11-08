@@ -1,9 +1,9 @@
 namespace GitHubReviewApp.Review;
 
 /// <summary>
-/// Decides which changed files the model cannot usefully read (lockfiles, binaries, minified bundles) and in which order the rest
-/// are reviewed when the budget is tight. Generated and vendored code is demoted to the end of the queue rather than dropped:
-/// it still compiles and runs, and its author controls both its name and its comments.
+/// Decides which changed files the model cannot usefully read (lockfiles, binaries, minified bundles), how much is at stake in each of
+/// the rest (its risk tier), and so in which order they are reviewed when the budget is tight. Generated and vendored code is demoted
+/// to the end of the queue rather than dropped: it still compiles and runs, and its author controls both its name and its comments.
 /// </summary>
 public static class DiffFileClassifier
 {
@@ -84,6 +84,21 @@ public static class DiffFileClassifier
         ".tests", ".test", ".unittests", ".integrationtests", ".specs"
     ];
 
+    private static readonly HashSet<string> _documentationDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "docs", "doc"
+    };
+
+    private static readonly HashSet<string> _infrastructureExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".bicep", ".bicepparam", ".tf", ".tfvars"
+    };
+
+    private static readonly HashSet<string> _pipelineDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "pipelines", ".azuredevops", "infra", "deploy", "deployment", "helm", "charts", "k8s", "kubernetes"
+    };
+
     /// <summary>Why a file cannot be reviewed as text, judged from its path alone, or null when it can.</summary>
     public static FileSkipReason? GetSkipReason(string path)
     {
@@ -96,14 +111,77 @@ public static class DiffFileClassifier
 
         var fileName = segments[^1];
 
-        if (_lockfileNames.Contains(fileName))
+        if (IsLockfileName(fileName))
         {
             return FileSkipReason.DependencyLockfile;
         }
 
-        var isMinified = _minifiedSuffixes.Any(suffix => fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+        return IsBinaryOrMinifiedName(fileName) ? FileSkipReason.BinaryOrMinified : null;
+    }
 
-        return isMinified || _binaryExtensions.Contains(Path.GetExtension(fileName)) ? FileSkipReason.BinaryOrMinified : null;
+    /// <summary>
+    /// How much is at stake in a changed file (design 5.3). The first rule that matches wins: a lockfile, binary or minified file is not
+    /// readable; then generated or vendored code; tests; documentation; the high-risk areas, by the words of the path; pipelines, container
+    /// files and infrastructure as code; configuration; and everything else is source. Tests, documentation and generated code come before
+    /// the keywords, so a test of the login code is a test and not an auth file.
+    /// </summary>
+    public static RiskTier GetRiskTier(PullRequestFile file)
+    {
+        var segments = SplitPath(file.Path);
+        var fileName = segments.Length == 0 ? string.Empty : segments[^1];
+
+        if (IsLockfileName(fileName) || IsBinaryOrMinifiedName(fileName))
+        {
+            return RiskTier.NotReadable;
+        }
+
+        if (IsGeneratedOrVendoredPath(segments, fileName) || IsNewFileWithGeneratedHeader(file.Status, file.Patch))
+        {
+            return RiskTier.GeneratedOrVendored;
+        }
+
+        if (IsTestPath(segments, fileName))
+        {
+            return RiskTier.Tests;
+        }
+
+        if (IsDocumentationPath(segments, fileName))
+        {
+            return RiskTier.Docs;
+        }
+
+        if (RiskKeywords.MatchHighRiskTier(file.Path) is { } highRiskTier)
+        {
+            return highRiskTier;
+        }
+
+        if (IsPipelinePath(segments, fileName))
+        {
+            return RiskTier.Pipelines;
+        }
+
+        if (IsConfigurationName(fileName))
+        {
+            return RiskTier.Config;
+        }
+
+        return RiskTier.Source;
+    }
+
+    /// <summary>True for a dependency lockfile, such as package-lock.json, yarn.lock or packages.lock.json.</summary>
+    public static bool IsLockfile(string path)
+    {
+        var segments = SplitPath(path);
+
+        return segments.Length > 0 && IsLockfileName(segments[^1]);
+    }
+
+    /// <summary>True for a documentation file (.md, .mdx, .markdown, .txt, .rst or .adoc) and for anything inside a docs or doc folder.</summary>
+    public static bool IsDocumentation(string path)
+    {
+        var segments = SplitPath(path);
+
+        return segments.Length > 0 && IsDocumentationPath(segments, segments[^1]);
     }
 
     /// <summary>True for a binary that can run or carry other files, such as a library, an executable or an archive.</summary>
@@ -160,6 +238,38 @@ public static class DiffFileClassifier
     private static string[] SplitPath(string path)
     {
         return path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static bool IsLockfileName(string fileName)
+    {
+        return _lockfileNames.Contains(fileName);
+    }
+
+    private static bool IsBinaryOrMinifiedName(string fileName)
+    {
+        var isMinified = _minifiedSuffixes.Any(suffix => fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+
+        return isMinified || _binaryExtensions.Contains(Path.GetExtension(fileName));
+    }
+
+    private static bool IsDocumentationPath(string[] segments, string fileName)
+    {
+        return _documentationExtensions.Contains(Path.GetExtension(fileName))
+            || segments.SkipLast(1).Any(_documentationDirectoryNames.Contains);
+    }
+
+    // A build or release pipeline, a container file, infrastructure as code, or anything inside a folder that holds them.
+    private static bool IsPipelinePath(string[] segments, string fileName)
+    {
+        return IsPipelineOrContainerFile(segments, fileName)
+            || _infrastructureExtensions.Contains(Path.GetExtension(fileName))
+            || segments.SkipLast(1).Any(_pipelineDirectoryNames.Contains);
+    }
+
+    private static bool IsConfigurationName(string fileName)
+    {
+        return _configurationExtensions.Contains(Path.GetExtension(fileName))
+            || fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsGeneratedOrVendoredPath(string[] segments, string fileName)

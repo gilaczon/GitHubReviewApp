@@ -25,8 +25,27 @@ public class PromptSanitizerTests
     }
 
     [Theory]
+    [InlineData("pr_metadata")]
+    [InlineData("pr_description_untrusted")]
+    [InlineData("changed_files")]
+    [InlineData("diff")]
+    [InlineData("file")]
+    public void NeutralizeTags_GivenTheChecklistPromptTags_Should_NeutralizeEachOpeningAndClosingTag(string tag)
+    {
+        // Arrange
+        var input = $"<{tag}>text</{tag}>";
+
+        // Act
+        var result = PromptSanitizer.NeutralizeTags(input);
+
+        // Assert
+        result.Should().Be($"<\\{tag}>text<\\/{tag}>");
+    }
+
+    [Theory]
     [InlineData("<div class=\"a\">text</div>")]
     [InlineData("<filename>")]
+    [InlineData("<different>")]
     [InlineData("List<string> values = new();")]
     [InlineData("if (a < b && c > d) { }")]
     [InlineData("")]

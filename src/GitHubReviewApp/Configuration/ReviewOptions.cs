@@ -2,7 +2,7 @@ namespace GitHubReviewApp.Configuration;
 
 /// <summary>
 /// Budgets and thresholds for reviewing pull requests of different sizes.
-/// Bound from the "Review" configuration section. The three diff budgets are in UTF-8 bytes, not characters: a token
+/// Bound from the "Review" configuration section. The diff budgets are in UTF-8 bytes, not characters: a token
 /// is at least one byte, so bytes bound the tokens however unusual the text is (code runs at about 3 to 4 bytes per
 /// token), while a count of characters does not, because one emoji or rare character can be several tokens.
 /// </summary>
@@ -24,6 +24,18 @@ public sealed class ReviewOptions
 
     /// <summary>A single file larger than this many UTF-8 bytes is cut at a line boundary and reported as partially reviewed.</summary>
     public int MaxFileBytes { get; init; } = 60_000;
+
+    /// <summary>
+    /// Largest amount of rendered diff a checklist review sends, in UTF-8 bytes. Files are taken highest risk first; one that does not fit
+    /// what is left is listed as left out, and the walk goes on to the next.
+    /// </summary>
+    public int MaxDiffBytes { get; init; } = 180_000;
+
+    /// <summary>Most changed files a checklist review lists by name. The rest are counted in one line.</summary>
+    public int MaxListedFiles { get; init; } = 1_000;
+
+    /// <summary>A pull request description longer than this many characters is cut, and the prompt says it was.</summary>
+    public int MaxDescriptionChars { get; init; } = 10_000;
 
     /// <summary>Most files reviewed for one pull request.</summary>
     public int MaxFiles { get; init; } = 150;

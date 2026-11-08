@@ -7,8 +7,10 @@ namespace GitHubReviewApp.Review;
 /// </summary>
 public static class PromptSanitizer
 {
+    // The chunked review's tags (files, pull_request, title, stats, repository_guidelines), the checklist review's (pr_metadata,
+    // pr_description_untrusted, changed_files, diff), and file, which both use.
     private static readonly Regex _wrapperTag = new(
-        @"<(/?)(files|file|pull_request|title|stats|repository_guidelines)\b",
+        @"<(/?)(files|file|pull_request|title|stats|repository_guidelines|pr_metadata|pr_description_untrusted|changed_files|diff)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static string NeutralizeTags(string text)

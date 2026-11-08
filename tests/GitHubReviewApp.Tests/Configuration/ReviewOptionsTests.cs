@@ -22,6 +22,9 @@ public class ReviewOptionsTests
         options.LargePullRequestLineThreshold.Should().Be(2_000);
         options.MaxGuidelinesChars.Should().Be(20_000);
         options.MaxReviewDurationSeconds.Should().Be(1_200);
+        options.MaxDiffBytes.Should().Be(180_000);
+        options.MaxListedFiles.Should().Be(1_000);
+        options.MaxDescriptionChars.Should().Be(10_000);
     }
 
     [Fact]

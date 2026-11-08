@@ -32,6 +32,9 @@ public class ReviewOptionsValidatorTests
 
         yield return [new ReviewOptions { MaxReviewDurationSeconds = 0 }, "Review:MaxReviewDurationSeconds"];
         yield return [new ReviewOptions { MaxReviewDurationSeconds = 86_401 }, "Review:MaxReviewDurationSeconds"];
+
+        yield return [new ReviewOptions { MaxListedFiles = 0 }, "Review:MaxListedFiles"];
+        yield return [new ReviewOptions { MaxDescriptionChars = 0 }, "Review:MaxDescriptionChars"];
     }
 
     [Fact]
@@ -43,6 +46,9 @@ public class ReviewOptionsValidatorTests
             MaxChunkBytes = 2_000,
             MaxFileBytes = 2_000,
             MaxTotalBytes = 2_000,
+            MaxDiffBytes = 2_000,
+            MaxListedFiles = 1,
+            MaxDescriptionChars = 1,
             MaxGuidelinesChars = 200_000,
             MaxReviewDurationSeconds = 86_400
         };
@@ -67,6 +73,32 @@ public class ReviewOptionsValidatorTests
         // Assert
         result.Failed.Should().BeTrue();
         result.Failures.Should().ContainSingle().Which.Should().Contain("Review:MaxReviewDurationSeconds").And.Contain("Claude:RequestTimeoutSeconds");
+    }
+
+    [Fact]
+    public void Validate_GivenAFileLimitAboveTheDiffBudget_Should_FailNamingBothSettings()
+    {
+        // Arrange — a file cut at 60,000 bytes could be larger than the whole diff, and be left out where a smaller cut would have fitted
+        var options = new ReviewOptions { MaxFileBytes = 60_000, MaxDiffBytes = 59_999 };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert
+        result.Failures.Should().ContainSingle().Which.Should().Contain("Review:MaxFileBytes").And.Contain("Review:MaxDiffBytes");
+    }
+
+    [Fact]
+    public void Validate_GivenNoDiffBudget_Should_FailSayingItMustBeAtLeastOne()
+    {
+        // Arrange
+        var options = new ReviewOptions { MaxDiffBytes = 0 };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert — the file limit, now above the budget, is reported as well
+        result.Failures.Should().Contain("Review:MaxDiffBytes must be at least 1, but it is 0.");
     }
 
     [Fact]
