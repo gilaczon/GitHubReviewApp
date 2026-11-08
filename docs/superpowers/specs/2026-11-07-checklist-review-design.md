@@ -236,7 +236,10 @@ For each run with outcome `Completed`:
   ellipsis when cut). A `concern` with no note gets "Not assessed by the reviewer."
 - `serious` is true only when the final status is `concern` and the JSON value is the boolean `true`.
 - `summary` cut to 240 characters, `coverage_note` to 160, findings to at most 8 entries; in a finding `file` 250, `issue` 160,
-  `fix` 120 characters. A finding whose `check` is not one of the eight is dropped.
+  `fix` 120 characters. A finding whose `check` is not one of the eight is dropped. A finding `line` below 1 reads as 0, which the
+  comment shows as no line.
+- A JSON property whose name cannot be read as text (the escape of half a surrogate pair) is ignored as if it were absent, and the
+  object's other properties are still read. Reading never throws.
 - A check the run left out is "missing" for that run (see merging).
 - An answer in which none of the eight checks is rated (an empty or entirely invalid `checks` list) is not a completed run: its
   outcome is `InvalidOutput`. The spec's schema required exactly eight entries (`minItems`/`maxItems` 8); the API cannot enforce that,
@@ -249,12 +252,14 @@ applies the derivation in 5.7.
 
 **Merging** (two completed runs, A started first):
 - For each check, if both runs rated it, the stricter status wins (`na` < `pass` < `concern` < `fail`). Among the runs with the
-  winning status, the note is taken from one that is serious and has a note, else from one with a note (A before B). `serious` is
-  true if any run with the winning status flagged it.
+  winning status, the note is the first serious run's real note, else the first real note (A before B), else "Not assessed by the
+  reviewer." when a run holds only that, else empty. A real note is one that is not empty and is not "Not assessed by the
+  reviewer.", which stands for "no note". `serious` is true if any run with the winning status flagged it.
 - A check only one run rated takes that run's rating. A check neither run rated is `concern` "Not assessed by the reviewer.".
 - With one completed run (5.12), its missing checks become `concern` "Not assessed by the reviewer.".
-- Findings: both runs' findings, stricter run first, each run's own order kept; a finding repeating the same check, file and line
-  (file compared case-insensitively, `\` and `/` and a leading `./` normalised) counts once.
+- Findings: both runs' findings, stricter run first, each run's own order kept. Each finding's file is first matched to the PR's
+  changed files, so a diff prefix such as `b/` is dropped; a path that matches no changed file is kept as written. A finding
+  repeating the same check, file and line (file compared case-insensitively, `\` and `/` and a leading `./` normalised) counts once.
 - Summary and coverage note come from the stricter run: the one whose own result is worst (FAIL, then PASS WITH COMMENTS, then
   PASS); if tied, A.
 
@@ -262,6 +267,8 @@ applies the derivation in 5.7.
 `concern`; PASS when every check is `pass` or `na`. Serious count = checks that are `concern` with `serious` true; when above zero the
 headline adds ` ({n} serious)`. Meaning texts are the spec's; "no security problem, but read the serious comment before approving"
 replaces the PASS WITH COMMENTS meaning when the serious count is above zero. FAIL's meaning is always "changes required".
+Deriving takes exactly the eight checks, each once, after missing ones are filled in, and refuses any other list, so a check that was
+not assessed can never yield PASS.
 
 **Agreement line**: "Reviewed twice; both reviews agreed." when every check has the same status in both runs. Otherwise "Reviewed
 twice; the stricter rating of each check is shown." and, when the two runs' own results differ, " They differed: {stricter result}
