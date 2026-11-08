@@ -4,8 +4,9 @@ namespace GitHubReviewApp.Review;
 /// Reads one run's answer, JSON matching <see cref="ChecklistSchema"/>, by the rules of design 5.6.3. The schema cannot hold a model to all of
 /// them (the API refuses length and count limits, and a value can still arrive of the wrong kind), so they are enforced here: an entry whose
 /// id names no check is dropped and the first entry for a check wins; a status that is not exactly one of the four is a concern, never a
-/// pass; only Security can fail; only the boolean <c>true</c> marks a concern serious; and every text is made one line within its limit,
-/// counted in UTF-16 characters. An answer that rates none of the eight checks is a failure, not a review in which nothing was assessed.
+/// pass; only Security can fail; only the boolean <c>true</c> marks a concern serious; and every text is made one line, loses what looks like
+/// a credential (<see cref="SecretRedactor"/>) and is then cut to its limit, counted in UTF-16 characters. An answer that rates none of the
+/// eight checks is a failure, not a review in which nothing was assessed.
 /// </summary>
 public static class ChecklistAnswerReader
 {
@@ -84,8 +85,8 @@ public static class ChecklistAnswerReader
         return ChecklistReadResult.Success(new RunAnswer(
             rated.AsReadOnly(),
             ReadFindings(answer),
-            OneLine(ReadText(answer, "summary"), MaxSummaryChars),
-            OneLine(ReadText(answer, "coverage_note"), MaxCoverageNoteChars)));
+            RedactedLine(ReadText(answer, "summary"), MaxSummaryChars),
+            RedactedLine(ReadText(answer, "coverage_note"), MaxCoverageNoteChars)));
     }
 
     private static Dictionary<CheckId, RatedCheck> ReadChecks(JsonElement answer)
@@ -114,7 +115,7 @@ public static class ChecklistAnswerReader
             status = CheckStatus.Concern;
         }
 
-        var note = status is CheckStatus.Concern or CheckStatus.Fail ? OneLine(ReadText(entry, "note"), MaxNoteChars) : string.Empty;
+        var note = status is CheckStatus.Concern or CheckStatus.Fail ? RedactedLine(ReadText(entry, "note"), MaxNoteChars) : string.Empty;
 
         if (status == CheckStatus.Concern && note.Length == 0)
         {
@@ -162,10 +163,10 @@ public static class ChecklistAnswerReader
 
         return new ChecklistFinding(
             check,
-            OneLine(ReadText(entry, "file"), MaxFileChars),
+            RedactedLine(ReadText(entry, "file"), MaxFileChars),
             ReadLine(entry),
-            OneLine(ReadText(entry, "issue"), MaxIssueChars),
-            OneLine(ReadText(entry, "fix"), MaxFixChars));
+            RedactedLine(ReadText(entry, "issue"), MaxIssueChars),
+            RedactedLine(ReadText(entry, "fix"), MaxFixChars));
     }
 
     private static int ReadLine(JsonElement entry)
@@ -238,11 +239,17 @@ public static class ChecklistAnswerReader
         }
     }
 
-    private static string OneLine(string text, int limit)
+    private static string RedactedLine(string text, int limit)
     {
         // With no separator, Split splits at every whitespace character (char.IsWhiteSpace), line breaks included. Dropping the empty
         // parts collapses each run of whitespace into one space and trims both ends.
-        var line = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var oneLine = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        // Every text read here can be posted, so credentials come out of it now, before the cut. The redactor knows a key by its whole shape
+        // (a GitHub token needs 30 characters after its prefix), so a key that the cut had shortened would no longer match, and what the cut
+        // left of it would be posted. What the redactor writes in a key's place holds no line break and no run of spaces, so the text stays
+        // one line.
+        var line = SecretRedactor.Redact(oneLine);
 
         if (line.Length <= limit)
         {

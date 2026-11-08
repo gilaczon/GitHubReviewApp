@@ -385,6 +385,33 @@ public class ChecklistCommentFormatterTests
     }
 
     [Theory]
+    [InlineData("summary", ChecklistAnswerReader.MaxSummaryChars)]
+    [InlineData("coverage_note", ChecklistAnswerReader.MaxCoverageNoteChars)]
+    [InlineData("note", ChecklistAnswerReader.MaxNoteChars)]
+    [InlineData("file", ChecklistAnswerReader.MaxFileChars)]
+    [InlineData("issue", ChecklistAnswerReader.MaxIssueChars)]
+    [InlineData("fix", ChecklistAnswerReader.MaxFixChars)]
+    public void FormatReview_GivenAKeyThatStraddlesTheReadersCut_Should_PostNoPartOfIt(string field, int limit)
+    {
+        // Arrange — the model's answer, read and merged as the app does it, with prose and then a GitHub token in one text. The reader keeps one
+        // character less than the limit and adds an ellipsis, so its cut falls seven characters before the token's end: cut first, the text
+        // would keep the prefix and 29 of the token's 36 characters, fewer than the 30 the redactor's shape needs.
+        var key = SecretExamples.ByKind["GitHub token"].Text;
+        var prose = new string('x', limit - 2 - (key.Length - 7)) + " ";
+        var answer = ChecklistAnswerReader.Read(AnswerJson(field, prose + key)).Answer!;
+        var merged = ChecklistMerger.Merge([answer]);
+
+        // Act
+        var body = Format(Context(), merged, FindingSelector.SelectShown(merged));
+        var checkRunSummary = ChecklistCommentFormatter.CheckRunSummary(body);
+
+        // Assert — the text is shown, and not even the first half of the key is posted in the comment or the check run
+        body.Should().Contain(prose);
+        body.Should().NotContain(key[..(key.Length / 2)]);
+        checkRunSummary.Should().NotContain(key[..(key.Length / 2)]);
+    }
+
+    [Theory]
     [InlineData("fix/@everyone", "main", "dev1", "everyone")]
     [InlineData("feature/retries", Hostile, "dev1", "evil.example")]
     [InlineData("feature/retries", "main", Hostile, "evil.example")]
@@ -476,6 +503,45 @@ public class ChecklistCommentFormatterTests
     private static ReviewContext Context()
     {
         return new ReviewContext("my-org", "my-service", 7, "feature/retries", "main", "dev1", HeadSha, 3, 40, 10, 2, 1, ["claude-sonnet-5-5"]);
+    }
+
+    /// <summary>
+    /// The spec example's answer as the model sends it, with <paramref name="text"/> as the text that <paramref name="field"/> names: the
+    /// summary, the coverage note, the note of the Testing concern, or the Testing finding's file, issue or fix.
+    /// </summary>
+    private static string AnswerJson(string field, string text)
+    {
+        return field switch
+        {
+            "summary" => AnswerJson(text, TestingNote, _untestedFailure.File, Issue, Fix, CoverageNote),
+            "coverage_note" => AnswerJson(Summary, TestingNote, _untestedFailure.File, Issue, Fix, text),
+            "note" => AnswerJson(Summary, text, _untestedFailure.File, Issue, Fix, CoverageNote),
+            "file" => AnswerJson(Summary, TestingNote, text, Issue, Fix, CoverageNote),
+            "issue" => AnswerJson(Summary, TestingNote, _untestedFailure.File, text, Fix, CoverageNote),
+            "fix" => AnswerJson(Summary, TestingNote, _untestedFailure.File, Issue, text, CoverageNote),
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, "The answer has no text of that name.")
+        };
+    }
+
+    /// <summary>An answer as the model sends it: every check a pass except a Testing concern, one Testing finding, a summary and a coverage note.</summary>
+    private static string AnswerJson(string summary, string note, string file, string issue, string fix, string coverageNote)
+    {
+        var checks = Checklist.Order.Select(id => (JsonNode)new JsonObject
+        {
+            ["id"] = Checklist.WireId(id),
+            ["status"] = id == CheckId.Testing ? "concern" : "pass",
+            ["note"] = id == CheckId.Testing ? note : string.Empty,
+            ["serious"] = false
+        });
+        var answer = new JsonObject
+        {
+            ["summary"] = summary,
+            ["checks"] = new JsonArray(checks.ToArray()),
+            ["findings"] = new JsonArray(new JsonObject { ["check"] = "testing", ["file"] = file, ["line"] = 0, ["issue"] = issue, ["fix"] = fix }),
+            ["coverage_note"] = coverageNote
+        };
+
+        return answer.ToJsonString();
     }
 
     /// <summary>The changed files of <see cref="Context"/>.</summary>

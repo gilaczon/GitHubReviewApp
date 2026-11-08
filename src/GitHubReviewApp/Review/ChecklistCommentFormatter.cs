@@ -3,9 +3,9 @@ namespace GitHubReviewApp.Review;
 /// <summary>
 /// Writes the comment the app posts on a pull request in the spec's layout (design 5.8), the "Review failed" notice, and the check run text made
 /// from either. The model's summary, notes and findings, the author's branch names and login, the file paths and the model ids are text the app
-/// did not write: credentials come out of it, it is cut to its limit, and it is rendered so that no mention, link, image, HTML or math in it is
-/// live. The app's own words and counts are written as they are, and so are the repository's name, the pull request's number and the commit,
-/// which come from GitHub.
+/// did not write: credentials come out of it before it is cut to its limit (for the model's text, <see cref="ChecklistAnswerReader"/> has done
+/// both once already), and it is rendered so that no mention, link, image, HTML or math in it is live. The app's own words and counts are
+/// written as they are, and so are the repository's name, the pull request's number and the commit, which come from GitHub.
 /// </summary>
 internal static class ChecklistCommentFormatter
 {
@@ -162,7 +162,8 @@ internal static class ChecklistCommentFormatter
 
     private static string FormatLocation(ChecklistFinding finding, PathResolver paths)
     {
-        // A path that matches no changed file is the model's own text, so a credential in it is removed as in the rest of what it wrote.
+        // The changed file's path, which the author chose, or the model's own text when it matches none (the reader has redacted that once
+        // already). Either way credentials come out of it before InlineCode cuts it to its limit.
         var path = MarkdownSanitizer.InlineCode(SecretRedactor.Redact(paths.Resolve(finding.File) ?? finding.File), ChecklistAnswerReader.MaxFileChars);
 
         // With no path there is nothing to point at, and an empty pair of backticks would pair with the first double backtick after it, which
@@ -224,7 +225,9 @@ internal static class ChecklistCommentFormatter
 
     private static string Sanitize(string text, int maxChars = int.MaxValue)
     {
-        // Credentials come out before the cut, so one that straddles it is not left half written.
+        // The model's text comes from ChecklistAnswerReader, which removed credentials before it cut the text to the limit used here: a key that
+        // a cut has shortened no longer has the shape the redactor knows, so redacting only here would miss one the reader's cut went through.
+        // Redacting again is a second layer for that text, and the only one for the author's branch names and login and the model ids.
         return MarkdownSanitizer.NeutralizeInline(SecretRedactor.Redact(text), maxChars);
     }
 

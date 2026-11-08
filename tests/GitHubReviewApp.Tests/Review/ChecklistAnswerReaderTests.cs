@@ -19,6 +19,9 @@ public class ChecklistAnswerReaderTests
         Answer("\"x\"")
     };
 
+    /// <summary>Every kind of credential the redactor knows by its shape, by the name of its example.</summary>
+    public static TheoryData<string> SecretKinds => new(SecretExamples.ByKind.Keys);
+
     [Fact]
     public void Read_GivenAnAnswerRatingAllEightChecks_Should_ReturnEveryRatingTheSummaryAndCoverage()
     {
@@ -517,6 +520,45 @@ public class ChecklistAnswerReaderTests
             new ChecklistFinding(CheckId.Functionality, new string('f', 249) + "…", 11, new string('i', 159) + "…", new string('x', 119) + "…"));
     }
 
+    [Theory]
+    [InlineData("summary", ChecklistAnswerReader.MaxSummaryChars)]
+    [InlineData("coverage_note", ChecklistAnswerReader.MaxCoverageNoteChars)]
+    [InlineData("note", ChecklistAnswerReader.MaxNoteChars)]
+    [InlineData("file", ChecklistAnswerReader.MaxFileChars)]
+    [InlineData("issue", ChecklistAnswerReader.MaxIssueChars)]
+    [InlineData("fix", ChecklistAnswerReader.MaxFixChars)]
+    public void Read_GivenAKeyThatStraddlesTheCut_Should_RedactItBeforeCutting(string field, int limit)
+    {
+        // Arrange — prose, then a GitHub token whose last seven characters lie past the cut. Cut first, the text would keep the prefix and 29
+        // of the token's 36 characters, fewer than the 30 the redactor's shape needs, so the formatter could no longer find what was left.
+        var key = SecretExamples.ByKind["GitHub token"].Text;
+        var prose = Prose(limit - 1 - (key.Length - 7));
+        var text = AnswerWithText(field, prose + key);
+
+        // Act
+        var answer = ChecklistAnswerReader.Read(text).Answer!;
+
+        // Assert — the whole key was replaced, and the text, now shorter than its limit, was kept whole
+        PostedTexts(answer).Should().Contain(prose + SecretRedactor.Replacement);
+    }
+
+    [Theory]
+    [MemberData(nameof(SecretKinds))]
+    public void Read_GivenAnyKindOfKeyAcrossTheCut_Should_KeepNoPartOfIt(string kind)
+    {
+        // Arrange — a note in which the cut falls halfway through the secret part of the example, after the text that leads up to it
+        var example = SecretExamples.ByKind[kind];
+        var firstHalf = example.Secret[..(example.Secret.Length / 2)];
+        var firstHalfEnd = example.Text.IndexOf(example.Secret, StringComparison.Ordinal) + firstHalf.Length;
+        var text = Answer(Entries(Check("security", "concern", Prose(ChecklistAnswerReader.MaxNoteChars - 1 - firstHalfEnd) + example.Text)));
+
+        // Act
+        var note = ChecklistAnswerReader.Read(text).Answer!.Rated[CheckId.Security].Note;
+
+        // Assert — a cut made first would have kept the secret's first half
+        note.Should().NotContain(firstHalf);
+    }
+
     [Fact]
     public void Read_GivenAFindingForAnUnknownCheck_Should_DropIt()
     {
@@ -618,6 +660,39 @@ public class ChecklistAnswerReaderTests
     private static string Entries(params string[] entries)
     {
         return $"[{string.Join(",", entries)}]";
+    }
+
+    /// <summary>
+    /// An answer that rates every check and has one finding, with <paramref name="text"/> as the text that <paramref name="field"/> names: the
+    /// summary, the coverage note, the note of a Testing concern, or the finding's file, issue or fix.
+    /// </summary>
+    private static string AnswerWithText(string field, string text)
+    {
+        return field switch
+        {
+            "summary" => Answer(AllEight(), Entries(Finding()), summary: text),
+            "coverage_note" => Answer(AllEight(), Entries(Finding()), coverage: text),
+            "note" => Answer(AllEight(CheckId.Testing, Check("testing", "concern", text)), Entries(Finding())),
+            "file" => Answer(AllEight(), Entries(Finding(file: text))),
+            "issue" => Answer(AllEight(), Entries(Finding(issue: text))),
+            "fix" => Answer(AllEight(), Entries(Finding(fix: text))),
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, "An answer has no text of that name.")
+        };
+    }
+
+    /// <summary>Every text of the answer that the comment can show: the notes, each finding's file, issue and fix, the summary and the coverage note.</summary>
+    private static IEnumerable<string> PostedTexts(RunAnswer answer)
+    {
+        return answer.Rated.Values.Select(check => check.Note)
+            .Concat(answer.Findings.SelectMany(finding => new[] { finding.File, finding.Issue, finding.Fix }))
+            .Append(answer.Summary)
+            .Append(answer.CoverageNote);
+    }
+
+    /// <summary>Plain text of the given length that ends in a space, so that a key written after it starts a word of its own.</summary>
+    private static string Prose(int length)
+    {
+        return new string('x', length - 1) + " ";
     }
 
     private static Dictionary<CheckId, RatedCheck> Ratings(params RatedCheck[] checks)
