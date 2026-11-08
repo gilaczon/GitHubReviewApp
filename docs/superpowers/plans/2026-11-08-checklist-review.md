@@ -282,6 +282,8 @@ agreed = count == 2 && every id rated by both with equal Status
 
 ### Task 4: Risk tiers and the review input
 
+> **Changed after review (Task 6f).** Design 5.3 holds the current rules where they differ from the steps below: digit runs and an acronym's plural `s` in path words, a token matching a keyword with one `s` added, application code in pipeline folders, licence files as docs, `DiffInclusion.LongLine` ("left out: a line too long to show") for a cut slice under 2,000 bytes, the singular counts, and the "GitHub listed only" line.
+
 **Files:**
 - Create: `src/GitHubReviewApp/Models/RiskTier.cs`, `DiffInclusion.cs`, `ReviewInputFile.cs`, `ReviewInput.cs`; `src/GitHubReviewApp/Review/RiskKeywords.cs`, `ReviewInputBuilder.cs`
 - Modify: `src/GitHubReviewApp/Review/DiffFileClassifier.cs` (add `GetRiskTier`, `IsLockfile`, `IsDocumentation`; keep the existing members until Task 14); `src/GitHubReviewApp/Review/PromptSanitizer.cs` (add the new tag names); `src/GitHubReviewApp/Models/PullRequestInfo.cs` (add `string Body = "", string AuthorLogin = "", string BaseRef = "", string HeadRef = ""` as the last, optional parameters); `src/GitHubReviewApp/Configuration/ReviewOptions.cs` (+`MaxDiffBytes` 180_000, `MaxListedFiles` 1_000, `MaxDescriptionChars` 10_000); `ReviewOptionsValidator.cs` (each at least 1; `MaxFileBytes` at most `MaxDiffBytes`); `src/GitHubReviewApp/appsettings.json` (the three keys under `Review`)
@@ -432,6 +434,8 @@ How the PR is given to you:
 ---
 
 ### Task 7: The comment, the check run text and the review record
+
+> **Changed after review (Task 7's fix round and Task 8f).** Design 5.8 holds the current rules where they differ from the steps below: `ChecklistAnswerReader` redacts the model's text before its cut (see Global Constraints); the summary goes through the block sanitizer `MarkdownSanitizer.Neutralize`, and a summary that would start a heading or another block shows as text; the coverage fallback and the footer use the singular for one file; `ReviewCommentMarker.For` refuses a sha that is not 40 hex characters.
 
 **Files:**
 - Create: `src/GitHubReviewApp/Models/ReviewRecordOutcome.cs`, `IssueComment.cs`, `ReviewContext.cs`; `src/GitHubReviewApp/Review/ReviewCommentMarker.cs`, `ReviewRecord.cs`, `ChecklistCommentFormatter.cs`

@@ -188,9 +188,9 @@ public static class ChecklistAnswerReader
 
     private static bool TryGetProperty(JsonElement owner, string propertyName, out JsonElement value)
     {
-        // Not JsonElement.TryGetProperty: that unescapes the names it compares and throws when one is the JSON escape of half a surrogate
-        // pair, even though the property asked for is in the object too. A name that cannot be read is skipped here as if it were absent,
-        // so the other properties are still found. Like TryGetProperty, the last of two properties with the same name wins.
+        // Not JsonElement.TryGetProperty: that unescapes the names it compares and can throw when it meets one that is the JSON escape of
+        // half a surrogate pair, even though the property asked for is in the object too. A name that cannot be read is skipped here as if
+        // it were absent, so the other properties are still found. Like TryGetProperty, the last of two properties with the same name wins.
         var isFound = false;
 
         value = default;

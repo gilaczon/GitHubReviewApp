@@ -46,17 +46,12 @@ public class ClaudeOptionsValidatorTests
         yield return [new ModelPrice { CacheReadPerMillionTokens = -0.01m }, "CacheReadPerMillionTokens"];
     }
 
-    private static ClaudeOptions OptionsPricing(string model, ModelPrice price)
-    {
-        return new ClaudeOptions { Pricing = new Dictionary<string, ModelPrice> { [model] = price } };
-    }
-
     [Theory]
     [MemberData(nameof(NegativePrices))]
     public void Validate_GivenANegativePrice_Should_Fail(ModelPrice price, string expectedPrice)
     {
         // Arrange — a negative price would take money off the cost of every review that used the model
-        var options = OptionsPricing("claude-sonnet-5-5", price);
+        var options = CreateOptionsWithPricing("claude-sonnet-5-5", price);
 
         // Act
         var result = _sut.Validate(Options.DefaultName, options);
@@ -70,7 +65,7 @@ public class ClaudeOptionsValidatorTests
     public void Validate_GivenAPriceOfZero_Should_Succeed()
     {
         // Arrange — "at least 0": a model that costs nothing, or a token kind it does not bill, is a price
-        var options = OptionsPricing("claude-free", new ModelPrice());
+        var options = CreateOptionsWithPricing("claude-free", new ModelPrice());
 
         // Act
         var result = _sut.Validate(Options.DefaultName, options);
@@ -85,7 +80,7 @@ public class ClaudeOptionsValidatorTests
     public void Validate_GivenAPriceWithNoModelName_Should_Fail(string model)
     {
         // Arrange — the table is looked up by model id, so a price with a blank id would never be used
-        var options = OptionsPricing(model, new ModelPrice { InputPerMillionTokens = 2.00m });
+        var options = CreateOptionsWithPricing(model, new ModelPrice { InputPerMillionTokens = 2.00m });
 
         // Act
         var result = _sut.Validate(Options.DefaultName, options);
@@ -184,5 +179,10 @@ public class ClaudeOptionsValidatorTests
 
         // Assert — a theory in ClaudeServiceTests sends each of these; the two lists must not drift apart
         efforts.Should().BeEquivalentTo("low", "medium", "high", "xhigh", "max");
+    }
+
+    private static ClaudeOptions CreateOptionsWithPricing(string model, ModelPrice price)
+    {
+        return new ClaudeOptions { Pricing = new Dictionary<string, ModelPrice> { [model] = price } };
     }
 }
