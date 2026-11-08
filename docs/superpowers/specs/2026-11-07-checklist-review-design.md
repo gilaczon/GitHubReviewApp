@@ -198,7 +198,7 @@ Both runs of one review use the same model and identical requests.
   `output_config.effort` = `Claude:Effort` (`high`; Opus 5.5 defaults to `medium`, so it is always sent); `max_tokens` 32,000; no
   tools; adaptive thinking by omission (thinking cannot be turned off on these models). One time budget per call
   (`Claude:RequestTimeoutSeconds`, 600) and the SDK's retries (`Claude:MaxRetries`, 1), as today.
-- **Refusal fallback** (`Claude:UseRefusalFallback`, true): the call moves to the beta Messages endpoint with
+- **Refusal fallback** (`Claude:IsRefusalFallbackEnabled`, true): the call moves to the beta Messages endpoint with
   `betas: ["server-side-fallback-2026-07-01"]` and `fallbacks: "default"`. A classifier refusal is then answered by the model
   Anthropic picks for that refusal category in the same call. The answer's text is all text blocks in order (a mid-stream fallback
   continues the partial text), and the `fallback` block is ignored. The model reported is the one that produced the answer
@@ -281,7 +281,7 @@ there are none), the coverage line, the footer, then the hidden marker.
 - Finding line: `- {icon of its check} {Check label} `{file}:{line}`: {issue} Fix: {fix}`; a line of 0 or less shows the file only.
   A file the model named is matched to a changed file when possible (the existing `PathResolver`), else shown as given.
 - Coverage line: shown only when some diff was left out or cut. It uses the stricter run's coverage note; if that is empty, the code
-  writes one ("{n} files not reviewed: over the 180 KB limit" and/or "{n} lockfiles or binaries are never read").
+  writes one: "{n} of {total} changed files were not reviewed in full."
 - Footer: `{owner}/{repo} #{number} · {head} → {base} · by {author} · {files} files +{added} -{deleted} ({included} reviewed) ·
   {model} at {sha first 10}`, where `included` counts files whose diff was sent in full or in part, and `model` is the answering
   model, or both joined with " + " when the runs differed (a fallback).
@@ -340,7 +340,7 @@ kinds, durations and failure-notice counters. Existing chunk, inline-comment and
 ### 5.11 Settings
 
 Static, in `appsettings.json` (validated at startup, unknown keys refused, as today):
-- `Claude`: `Effort` (high), `MaxOutputTokens` (32,000), `RequestTimeoutSeconds` (600), `MaxRetries` (1), `UseRefusalFallback`
+- `Claude`: `Effort` (high), `MaxOutputTokens` (32,000), `RequestTimeoutSeconds` (600), `MaxRetries` (1), `IsRefusalFallbackEnabled`
   (true), `Pricing` (5.10). `Model` is removed.
 - `Review`: `MaxDiffBytes` (180,000), `MaxFileBytes` (60,000), `MaxListedFiles` (1,000), `MaxDescriptionChars` (10,000),
   `OpusLineThreshold` (40), `HighRiskRepositories`, `MaxConcurrentModelRequests` (12), `MaxReviewDurationSeconds` (1,200),
@@ -349,7 +349,7 @@ Static, in `appsettings.json` (validated at startup, unknown keys refused, as to
   `MaxGuidelinesChars`.
 
 Runtime, the house rule's "settings that must change at runtime", in a `Runtime` section that is **not** bound by the strict startup
-binder: `ReviewsEnabled` (true), `SonnetModel` (`claude-sonnet-5-5`), `OpusModel` (`claude-opus-5-5`). Defaults live in
+binder: `IsReviewEnabled` (true), `SonnetModel` (`claude-sonnet-5-5`), `OpusModel` (`claude-opus-5-5`). Defaults live in
 `appsettings.json`. Azure App Configuration overrides them when the `AppConfigurationConnectionString` secret is present (from Key
 Vault through TopSecret, per `/dev-appconfig-integrate`):
 - Added in `Program.cs` after `AddSecretsToConfiguration`, on the same `ConfigurationManager` (the skill's non-web bootstrap), with
@@ -423,7 +423,7 @@ tests that cover only these. Kept and reused: `WebhookReceiver`, `ReviewProcesso
 ### 5.16 Rollout (owner actions)
 
 1. GitHub App settings: add Checks: Read and write; each installation owner approves the new permission.
-2. Optional, for runtime switching: create the App Configuration keys `GitHubReviewApp:Runtime:ReviewsEnabled`,
+2. Optional, for runtime switching: create the App Configuration keys `GitHubReviewApp:Runtime:IsReviewEnabled`,
    `GitHubReviewApp:Runtime:SonnetModel`, `GitHubReviewApp:Runtime:OpusModel` and `GitHubReviewApp:Sentinel`, and put the store's
    read-only connection string in Key Vault as `AppConfigurationConnectionString`.
 3. Deploy, run the post-deployment check in `docs/operations.md`, and open a test PR on the test repository.
