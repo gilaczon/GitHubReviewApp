@@ -45,7 +45,7 @@ public sealed class ReviewOptions
 
     /// <summary>
     /// Repositories, each written <c>owner/repo</c> and compared without regard to letter case, that always count as a high-risk area, whatever
-    /// their name or files say. For a repository whose name does not say what it holds.
+    /// their name or files say. It is for a repository whose name does not say what it holds.
     /// </summary>
     public string[] HighRiskRepositories { get; init; } = [];
 

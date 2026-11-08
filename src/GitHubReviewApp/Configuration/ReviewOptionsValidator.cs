@@ -89,7 +89,7 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
             {
                 failures.Add(
                     $"Review:HighRiskRepositories has '{repository}', which is not written owner/repo, with no spaces. " +
-                    "It would match no repository, and one that needs the stronger model would be reviewed by the other.");
+                    "It would match no repository, so a repository that needs the stronger model would be reviewed by the other one.");
             }
         }
 
