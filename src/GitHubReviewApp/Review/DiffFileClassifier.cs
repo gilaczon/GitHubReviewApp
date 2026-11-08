@@ -60,6 +60,14 @@ public static class DiffFileClassifier
         ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc"
     };
 
+    // Licence and notice files, whatever their extension. They are documentation, though "license" is also a personal-data keyword.
+    private static readonly HashSet<string> _licenceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "LICENSE", "LICENCE", "COPYING", "NOTICE"
+    };
+
+    private static readonly string[] _licenceNamePrefixes = ["LICENSE-", "LICENCE-"];
+
     private static readonly HashSet<string> _sourceExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".vb", ".fs", ".csx", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".py",
@@ -97,6 +105,13 @@ public static class DiffFileClassifier
     private static readonly HashSet<string> _pipelineDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "pipelines", ".azuredevops", "infra", "deploy", "deployment", "helm", "charts", "k8s", "kubernetes"
+    };
+
+    // Source code that a pipeline folder holds as part of the pipeline: scripts and infrastructure as code. Any other source code in a folder
+    // of that name is the application's ("src/components/charts/LineChart.vue").
+    private static readonly HashSet<string> _scriptAndInfrastructureExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".sh", ".bash", ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".bicep", ".tf"
     };
 
     /// <summary>Why a file cannot be reviewed as text, judged from its path alone, or null when it can.</summary>
@@ -176,7 +191,10 @@ public static class DiffFileClassifier
         return segments.Length > 0 && IsLockfileName(segments[^1]);
     }
 
-    /// <summary>True for a documentation file (.md, .mdx, .markdown, .txt, .rst or .adoc) and for anything inside a docs or doc folder.</summary>
+    /// <summary>
+    /// True for a documentation file (.md, .mdx, .markdown, .txt, .rst or .adoc), for a licence file (LICENSE, LICENCE, COPYING or NOTICE,
+    /// whatever its extension, and LICENSE-* or LICENCE-*), and for anything inside a docs or doc folder.
+    /// </summary>
     public static bool IsDocumentation(string path)
     {
         var segments = SplitPath(path);
@@ -255,15 +273,27 @@ public static class DiffFileClassifier
     private static bool IsDocumentationPath(string[] segments, string fileName)
     {
         return _documentationExtensions.Contains(Path.GetExtension(fileName))
+            || IsLicenceName(fileName)
             || segments.SkipLast(1).Any(_documentationDirectoryNames.Contains);
     }
 
-    // A build or release pipeline, a container file, infrastructure as code, or anything inside a folder that holds them.
+    private static bool IsLicenceName(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+
+        return _licenceNames.Contains(name) || _licenceNamePrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // A build or release pipeline, a container file, infrastructure as code, or a file inside a folder that holds them, unless that file is
+    // the application's own code: a source file there is a pipeline file only when it is a script or infrastructure as code.
     private static bool IsPipelinePath(string[] segments, string fileName)
     {
+        var extension = Path.GetExtension(fileName);
+        var isApplicationCode = _sourceExtensions.Contains(extension) && !_scriptAndInfrastructureExtensions.Contains(extension);
+
         return IsPipelineOrContainerFile(segments, fileName)
-            || _infrastructureExtensions.Contains(Path.GetExtension(fileName))
-            || segments.SkipLast(1).Any(_pipelineDirectoryNames.Contains);
+            || _infrastructureExtensions.Contains(extension)
+            || (!isApplicationCode && segments.SkipLast(1).Any(_pipelineDirectoryNames.Contains));
     }
 
     private static bool IsConfigurationName(string fileName)

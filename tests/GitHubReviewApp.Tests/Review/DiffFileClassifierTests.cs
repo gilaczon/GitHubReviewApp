@@ -387,6 +387,15 @@ public class DiffFileClassifierTests
     [InlineData("charts/api/templates/service.yaml", RiskTier.Pipelines)]
     [InlineData("k8s/service.yaml", RiskTier.Pipelines)]
     [InlineData("kubernetes/ingress.yaml", RiskTier.Pipelines)]
+    // Application code in a folder named like a pipeline folder is the application's; scripts and everything else there stay pipeline files
+    [InlineData("src/components/charts/LineChart.vue", RiskTier.Source)]
+    [InlineData("src/Api/Infra/AppDbContext.cs", RiskTier.Source)]
+    [InlineData("src/Application/Pipelines/LoggingBehavior.cs", RiskTier.Source)]
+    [InlineData("charts/app/templates/deployment.yaml", RiskTier.Pipelines)]
+    [InlineData("charts/app/templates/_helpers.tpl", RiskTier.Pipelines)]
+    [InlineData("infra/main.json", RiskTier.Pipelines)]
+    [InlineData("deploy/run-migrations.ps1", RiskTier.Pipelines)]
+    [InlineData("pipelines/templates/build.yml", RiskTier.Pipelines)]
     // Each configuration rule on its own
     [InlineData(".env", RiskTier.Config)]
     [InlineData(".env.local", RiskTier.Config)]
@@ -402,6 +411,14 @@ public class DiffFileClassifierTests
     [InlineData("intro.markdown", RiskTier.Docs)]
     [InlineData("doc/guide.yaml", RiskTier.Docs)]
     [InlineData("Docs/api/openapi.yaml", RiskTier.Docs)]
+    // A licence file is documentation, not personal data, though "license" is a personal-data keyword
+    [InlineData("LICENSE", RiskTier.Docs)]
+    [InlineData("licence", RiskTier.Docs)]
+    [InlineData("COPYING", RiskTier.Docs)]
+    [InlineData("NOTICE", RiskTier.Docs)]
+    [InlineData("LICENSE-MIT", RiskTier.Docs)]
+    [InlineData("src/Lib/LICENSE", RiskTier.Docs)]
+    [InlineData("src/Verification/DriverLicenseValidator.cs", RiskTier.PersonalData)]
     // First match wins
     [InlineData("docs/logo.png", RiskTier.NotReadable)]
     [InlineData("node_modules/stripe/index.js", RiskTier.GeneratedOrVendored)]
@@ -461,6 +478,7 @@ public class DiffFileClassifierTests
     [InlineData("guide.adoc", true)]
     [InlineData("docs/setup.yaml", true)]
     [InlineData("src/doc/Notes.cs", true)]
+    [InlineData("LICENSE", true)]
     [InlineData("src/Program.cs", false)]
     [InlineData("docs", false)]                        // a file named docs is not a docs folder
     [InlineData("src/documents/Upload.cs", false)]     // the folder name must be docs or doc, whole
