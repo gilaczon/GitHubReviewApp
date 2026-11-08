@@ -12,8 +12,8 @@ public sealed record ReviewInput(string UserMessage, IReadOnlyList<ReviewInputFi
     /// <summary>Files whose diff was sent cut.</summary>
     public int PartialFileCount => Files.Count(file => file.Inclusion == DiffInclusion.Partial);
 
-    /// <summary>Files whose diff did not fit the budget.</summary>
-    public int OverBudgetFileCount => Files.Count(file => file.Inclusion == DiffInclusion.OverBudget);
+    /// <summary>Files left out for their size: those whose diff did not fit the budget, and those with a line too long to show.</summary>
+    public int OverBudgetFileCount => Files.Count(file => file.Inclusion is DiffInclusion.OverBudget or DiffInclusion.LongLine);
 
     /// <summary>Lockfiles, binaries and minified files, which are never read.</summary>
     public int NotReadFileCount => Files.Count(file => file.Inclusion is DiffInclusion.Lockfile or DiffInclusion.BinaryOrMinified);

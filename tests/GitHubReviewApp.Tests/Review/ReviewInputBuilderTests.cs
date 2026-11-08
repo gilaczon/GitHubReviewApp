@@ -18,6 +18,12 @@ public class ReviewInputBuilderTests
     // A 2 MB patch: 2,000 lines of 1,000 characters.
     private static readonly string _hugePatch = Patch(2_000, new string('x', 1_000));
 
+    /// <summary>Every value of <see cref="DiffInclusion"/>, read from the enum, so a value added later is in the data without anyone adding it.</summary>
+    public static TheoryData<DiffInclusion> EveryInclusion => new(Enum.GetValues<DiffInclusion>());
+
+    /// <summary>Every value of <see cref="RiskTier"/>, read from the enum.</summary>
+    public static TheoryData<RiskTier> EveryTier => new(Enum.GetValues<RiskTier>());
+
     [Fact]
     public void Build_GivenFilesOfEveryTier_Should_ListThemHighestRiskFirst()
     {
@@ -92,6 +98,19 @@ public class ReviewInputBuilderTests
             "<pr_metadata>\nrepository: my-org/my-service\ntitle: Add retries\nauthor: dev1\n" +
             "base_branch: main\nhead_branch: feature/retries\nadditions: 40\ndeletions: 10\nhead_sha: 0123456789abcdef0123456789abcdef01234567\n" +
             "</pr_metadata>\n\n");
+    }
+
+    [Fact]
+    public void Build_GivenNullTitleAuthorAndBranches_Should_WriteThemEmpty()
+    {
+        // Arrange — a field missing from GitHub's JSON can arrive as null, whatever the record's types say
+        var pullRequest = PullRequest(title: null!, author: null!, baseRef: null!, headRef: null!);
+
+        // Act
+        var input = BuildSut().Build(Owner, Repo, pullRequest, [Modified("src/Util/Strings.cs")]);
+
+        // Assert
+        input.UserMessage.Should().Contain("\ntitle: \nauthor: \nbase_branch: \nhead_branch: \n");
     }
 
     [Fact]
@@ -270,17 +289,34 @@ public class ReviewInputBuilderTests
     }
 
     [Fact]
-    public void Build_GivenAFileThatWouldBeCutToATinySlice_Should_LeaveItOut()
+    public void Build_GivenAFileWhoseFirstLineIsLongerThanTheFileLimit_Should_ListItAsALineTooLongToShow()
     {
-        // Arrange — its one line is longer than a file may take, so a cut would keep none of it
+        // Arrange — its one line is longer than a file may take, so a cut would keep none of it, and nothing else uses the 180 KB budget
         var file = new PullRequestFile("src/Util/OneLine.cs", "modified", 1, 0, "@@ -0,0 +1 @@\n+" + new string('x', 70_000));
 
         // Act
         var input = BuildSut().Build(Owner, Repo, PullRequest(), [file]);
 
         // Assert
-        input.Files.Should().ContainSingle().Which.Inclusion.Should().Be(DiffInclusion.OverBudget);
+        input.Files.Should().ContainSingle().Which.Inclusion.Should().Be(DiffInclusion.LongLine);
+        ListedFiles(input.UserMessage).Should().ContainSingle().Which.Should().EndWith("): left out: a line too long to show");
         input.UserMessage.Should().EndWith("<diff>\n</diff>");
+    }
+
+    [Fact]
+    public void Build_GivenALineTooLongToShowWhenTheBudgetIsSpentToo_Should_StillListItAsALineTooLongToShow()
+    {
+        // Arrange — the first file leaves 10 bytes of the budget, too few for the second file's cut, which is too small to send anyway
+        var first = Modified("src/Util/First.cs", lineCount: 30, lineLength: 60);
+        var oneLine = new PullRequestFile("src/Util/OneLine.cs", "modified", 1, 0, "@@ -0,0 +1 @@\n+" + new string('x', 70_000));
+        var budget = RenderedBytes(first) + 1 + 10;
+        var options = new ReviewOptions { MaxFileBytes = budget, MaxDiffBytes = budget };
+
+        // Act
+        var input = BuildSut(options).Build(Owner, Repo, PullRequest(), [first, oneLine]);
+
+        // Assert — the line is checked before the budget, so the reason given is the one that holds whatever the budget
+        input.Files.Select(file => file.Inclusion).Should().Equal(DiffInclusion.Included, DiffInclusion.LongLine);
     }
 
     [Fact]
@@ -358,6 +394,61 @@ public class ReviewInputBuilderTests
     }
 
     [Fact]
+    public void Build_GivenOneDiffIncludedInFull_Should_SayOneDiff()
+    {
+        // Arrange — two files, so only the diff count is one: a small file sent whole and a lockfile left out
+        var files = new[] { Modified("src/Util/Strings.cs"), Modified("package-lock.json") };
+
+        // Act
+        var input = BuildSut().Build(Owner, Repo, PullRequest(), files);
+
+        // Assert
+        input.UserMessage.Should().Contain("<changed_files>\n2 files changed, highest risk first. 1 diff included in full, 0 partly, 1 left out.\n");
+    }
+
+    [Fact]
+    public void Build_GivenOneFileOverTheListCap_Should_SayOneMoreFile()
+    {
+        // Arrange
+        var options = new ReviewOptions { MaxListedFiles = 2 };
+        var files = Enumerable.Range(1, 3).Select(index => Modified($"src/Util/File{index}.cs")).ToList();
+
+        // Act
+        var input = BuildSut(options).Build(Owner, Repo, PullRequest(), files);
+
+        // Assert
+        ListedFiles(input.UserMessage).Should().HaveCount(3).And.HaveElementAt(2, "and 1 more file not listed");
+    }
+
+    [Fact]
+    public void Build_GivenMoreChangedFilesThanGitHubListed_Should_SayHowManyWereListed()
+    {
+        // Arrange — GitHub lists at most 3,000 files, so a pull request can change more files than the builder is given
+        var files = Enumerable.Range(1, 3).Select(index => Modified($"src/Util/File{index}.cs")).ToList();
+
+        // Act
+        var input = BuildSut().Build(Owner, Repo, PullRequest(changedFileCount: 5_000), files);
+
+        // Assert — on the line after the counts line
+        Section(input.UserMessage, "changed_files").Split('\n')[1].Should().Be("GitHub listed only 3 of the 5000 changed files.");
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(0)]
+    public void Build_GivenEveryChangedFileListed_Should_NotMentionTheListing(int changedFileCount)
+    {
+        // Arrange — as many changed files as GitHub listed, or no count at all
+        var files = Enumerable.Range(1, 3).Select(index => Modified($"src/Util/File{index}.cs")).ToList();
+
+        // Act
+        var input = BuildSut().Build(Owner, Repo, PullRequest(changedFileCount: changedFileCount), files);
+
+        // Assert
+        input.UserMessage.Should().NotContain("GitHub listed");
+    }
+
+    [Fact]
     public void Build_GivenMoreFilesThanTheListLimit_Should_ListTheLimitAndCountTheRest()
     {
         // Arrange
@@ -390,20 +481,74 @@ public class ReviewInputBuilderTests
         input.Files.Should().HaveCount(3_000);
     }
 
+    [Theory]
+    [MemberData(nameof(EveryInclusion))]
+    public void InclusionText_GivenEveryInclusion_Should_ReturnAText(DiffInclusion inclusion)
+    {
+        // Arrange — the value comes from the enum, so one added later without a text of its own fails here
+
+        // Act
+        var text = ReviewInputBuilder.InclusionText(inclusion, new ReviewOptions());
+
+        // Assert
+        text.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void InclusionText_GivenTheInclusions_Should_GiveEachItsOwnText()
+    {
+        // Arrange
+        var options = new ReviewOptions();
+
+        // Act
+        var texts = Enum.GetValues<DiffInclusion>().Select(inclusion => ReviewInputBuilder.InclusionText(inclusion, options)).ToList();
+
+        // Assert
+        texts.Should().OnlyHaveUniqueItems();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryTier))]
+    public void TierLabel_GivenEveryTier_Should_ReturnALabel(RiskTier tier)
+    {
+        // Arrange — the value comes from the enum, so one added later without a label of its own fails here
+
+        // Act
+        var label = ReviewInputBuilder.TierLabel(tier);
+
+        // Assert
+        label.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void TierLabel_GivenTheTiers_Should_GiveEachItsOwnLabel()
+    {
+        // Arrange
+        var tiers = Enum.GetValues<RiskTier>();
+
+        // Act
+        var labels = tiers.Select(ReviewInputBuilder.TierLabel).ToList();
+
+        // Assert
+        labels.Should().OnlyHaveUniqueItems();
+    }
+
     private static ReviewInputBuilder BuildSut(ReviewOptions? options = null)
     {
         return new ReviewInputBuilder(Options.Create(options ?? new ReviewOptions()));
     }
 
+    // The changed-file count defaults to none, so that only a test that sets it gets the line saying GitHub listed fewer files.
     private static PullRequestInfo PullRequest(
         string title = "Add retries",
         string body = "Retries the refund call.",
         string author = "dev1",
         string baseRef = "main",
-        string headRef = "feature/retries")
+        string headRef = "feature/retries",
+        int changedFileCount = 0)
     {
         return new PullRequestInfo(
-            "open", false, title, HeadSha, "fedcba9876543210fedcba9876543210fedcba98", 3, 40, 10,
+            "open", false, title, HeadSha, "fedcba9876543210fedcba9876543210fedcba98", changedFileCount, 40, 10,
             Body: body, AuthorLogin: author, BaseRef: baseRef, HeadRef: headRef);
     }
 

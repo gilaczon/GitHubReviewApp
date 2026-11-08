@@ -25,10 +25,47 @@ public sealed class ReviewInputBuilder
 
         AppendMetadata(message, owner, repo, pullRequest);
         AppendDescription(message, pullRequest.Body);
-        AppendChangedFiles(message, input);
+        AppendChangedFiles(message, input, pullRequest.ChangedFileCount);
         AppendDiff(message, diffs);
 
         return input with { UserMessage = message.ToString() };
+    }
+
+    /// <summary>What the changed-files list says happened to a file's diff. Every value has its own text, and a value without one throws.</summary>
+    internal static string InclusionText(DiffInclusion inclusion, ReviewOptions options)
+    {
+        return inclusion switch
+        {
+            DiffInclusion.Included => "included",
+            DiffInclusion.Partial => $"partial, cut at {Number(options.MaxFileBytes / 1_000)} KB",
+            DiffInclusion.OverBudget => $"left out: over the {Number(options.MaxDiffBytes / 1_000)} KB limit",
+            DiffInclusion.Lockfile => "left out: lockfile, not read",
+            DiffInclusion.BinaryOrMinified => "left out: binary or minified, not read",
+            DiffInclusion.NoDiff => "left out: no diff from GitHub",
+            DiffInclusion.LongLine => "left out: a line too long to show",
+            _ => throw new UnreachableException($"The diff inclusion {inclusion} has no text in the changed-files list.")
+        };
+    }
+
+    /// <summary>The changed-files list's name for a risk tier. Every tier has its own label, and a tier without one throws.</summary>
+    internal static string TierLabel(RiskTier tier)
+    {
+        return tier switch
+        {
+            RiskTier.Auth => "auth",
+            RiskTier.Payments => "payments",
+            RiskTier.Cards => "cards",
+            RiskTier.BankLogin => "bank login",
+            RiskTier.PersonalData => "personal data",
+            RiskTier.Pipelines => "pipeline",
+            RiskTier.Config => "config",
+            RiskTier.Source => "source",
+            RiskTier.Tests => "test",
+            RiskTier.Docs => "docs",
+            RiskTier.GeneratedOrVendored => "generated or vendored",
+            RiskTier.NotReadable => "not readable as text",
+            _ => throw new UnreachableException($"The risk tier {tier} has no label in the changed-files list.")
+        };
     }
 
     // Walks the files highest risk first, in GitHub's order within a tier, and sends each diff that fits what is left of the budget. A file
@@ -61,10 +98,16 @@ public sealed class ReviewInputBuilder
             {
                 var rendered = DiffRenderer.Render(file, _options.MaxFileBytes);
                 var renderedBytes = rendered.RenderedBytes;
-                var isOverBudget = renderedBytes + 1 > _options.MaxDiffBytes - usedBytes;
                 var isTooSmallASlice = rendered.IsPartial && renderedBytes < MinimumUsefulPartialBytes;
+                var isOverBudget = renderedBytes + 1 > _options.MaxDiffBytes - usedBytes;
 
-                if (isOverBudget || isTooSmallASlice)
+                // A cut that small means a line near the top is longer than what is left of the file limit. That would leave the file out
+                // whatever the budget, so it is the reason given, even when the budget has run out as well.
+                if (isTooSmallASlice)
+                {
+                    inclusion = DiffInclusion.LongLine;
+                }
+                else if (isOverBudget)
                 {
                     inclusion = DiffInclusion.OverBudget;
                 }
@@ -125,7 +168,7 @@ public sealed class ReviewInputBuilder
         return text[..keptLength] + "\n[description cut]";
     }
 
-    private void AppendChangedFiles(StringBuilder message, ReviewInput input)
+    private void AppendChangedFiles(StringBuilder message, ReviewInput input, int changedFileCount)
     {
         var fileCount = input.Files.Count;
         var fullCount = input.IncludedFileCount - input.PartialFileCount;
@@ -133,18 +176,26 @@ public sealed class ReviewInputBuilder
 
         message.Append("<changed_files>\n");
         message.Append(Number(fileCount)).Append(fileCount == 1 ? " file changed" : " files changed").Append(", highest risk first. ");
-        message.Append(Number(fullCount)).Append(" diffs included in full, ");
+        message.Append(Number(fullCount)).Append(fullCount == 1 ? " diff included in full, " : " diffs included in full, ");
         message.Append(Number(input.PartialFileCount)).Append(" partly, ");
         message.Append(Number(leftOutCount)).Append(" left out.\n");
 
+        // GitHub lists at most 3,000 of a pull request's files, so a pull request can have changed more files than the builder was given.
+        if (changedFileCount > fileCount)
+        {
+            message.Append("GitHub listed only ").Append(Number(fileCount)).Append(" of the ").Append(Number(changedFileCount)).Append(" changed files.\n");
+        }
+
         foreach (var file in input.Files.Take(_options.MaxListedFiles))
         {
-            AppendChangedFileLine(message, file, InclusionText(file.Inclusion));
+            AppendChangedFileLine(message, file, InclusionText(file.Inclusion, _options));
         }
 
         if (fileCount > _options.MaxListedFiles)
         {
-            message.Append("and ").Append(Number(fileCount - _options.MaxListedFiles)).Append(" more files not listed\n");
+            var unlistedCount = fileCount - _options.MaxListedFiles;
+
+            message.Append("and ").Append(Number(unlistedCount)).Append(unlistedCount == 1 ? " more file not listed\n" : " more files not listed\n");
         }
 
         message.Append("</changed_files>\n\n");
@@ -160,38 +211,6 @@ public sealed class ReviewInputBuilder
         message.Append("): ").Append(inclusion).Append('\n');
     }
 
-    private string InclusionText(DiffInclusion inclusion)
-    {
-        return inclusion switch
-        {
-            DiffInclusion.Included => "included",
-            DiffInclusion.Partial => $"partial, cut at {Number(_options.MaxFileBytes / 1_000)} KB",
-            DiffInclusion.OverBudget => $"left out: over the {Number(_options.MaxDiffBytes / 1_000)} KB limit",
-            DiffInclusion.Lockfile => "left out: lockfile, not read",
-            DiffInclusion.BinaryOrMinified => "left out: binary or minified, not read",
-            _ => "left out: no diff from GitHub" // DiffInclusion.NoDiff, the last value
-        };
-    }
-
-    private static string TierLabel(RiskTier tier)
-    {
-        return tier switch
-        {
-            RiskTier.Auth => "auth",
-            RiskTier.Payments => "payments",
-            RiskTier.Cards => "cards",
-            RiskTier.BankLogin => "bank login",
-            RiskTier.PersonalData => "personal data",
-            RiskTier.Pipelines => "pipeline",
-            RiskTier.Config => "config",
-            RiskTier.Source => "source",
-            RiskTier.Tests => "test",
-            RiskTier.Docs => "docs",
-            RiskTier.GeneratedOrVendored => "generated or vendored",
-            _ => "not readable as text" // RiskTier.NotReadable, the last tier
-        };
-    }
-
     private static void AppendDiff(StringBuilder message, List<PlannedFile> diffs)
     {
         message.Append("<diff>\n");
@@ -204,10 +223,11 @@ public sealed class ReviewInputBuilder
         message.Append("</diff>");
     }
 
-    // Every author-written value but the description is kept on one line, so it cannot add a line of its own to the block it is in.
-    private static string Inline(string value)
+    // Every author-written value but the description is kept on one line, so it cannot add a line of its own to the block it is in. A field
+    // missing from GitHub's JSON can arrive as null, whatever the record's types say, and is written empty.
+    private static string Inline(string? value)
     {
-        return PromptSanitizer.NeutralizeTags(value.ReplaceLineEndings(" "));
+        return PromptSanitizer.NeutralizeTags((value ?? string.Empty).ReplaceLineEndings(" "));
     }
 
     private static string Number(int value)

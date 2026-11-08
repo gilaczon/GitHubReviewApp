@@ -13,15 +13,17 @@ public class ReviewInputTests
             .Concat(Files(DiffInclusion.Lockfile, 2))
             .Concat(Files(DiffInclusion.BinaryOrMinified, 3))
             .Concat(Files(DiffInclusion.NoDiff, 6))
+            .Concat(Files(DiffInclusion.LongLine, 7))
             .ToList();
 
         // Act
         var input = new ReviewInput("message", files);
 
-        // Assert — included counts the partial files too, and not read counts lockfiles with binaries
+        // Assert — included counts the partial files too, over budget the files with a line too long to show (both are left out for their
+        // size), and not read counts lockfiles with binaries
         input.IncludedFileCount.Should().Be(3);
         input.PartialFileCount.Should().Be(1);
-        input.OverBudgetFileCount.Should().Be(4);
+        input.OverBudgetFileCount.Should().Be(11);
         input.NotReadFileCount.Should().Be(5);
         input.NoDiffFileCount.Should().Be(6);
     }
