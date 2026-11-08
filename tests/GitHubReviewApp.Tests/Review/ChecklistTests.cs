@@ -26,6 +26,19 @@ public class ChecklistTests
         order.Should().Equal(expected);
     }
 
+    [Fact]
+    public void Order_GivenTheCheckIdEnum_Should_HoldEveryValueExactlyOnce()
+    {
+        // Arrange — the enum, not a list typed here, is the source: a ninth CheckId without a row in the table fails this test
+        var everyCheck = Enum.GetValues<CheckId>();
+
+        // Act
+        var order = Checklist.Order;
+
+        // Assert — WireId and Label throw for a check with no row
+        order.Should().BeEquivalentTo(everyCheck).And.OnlyHaveUniqueItems();
+    }
+
     [Theory]
     [InlineData(CheckId.StandardsDesign, "standards-design")]
     [InlineData(CheckId.Functionality, "functionality")]
