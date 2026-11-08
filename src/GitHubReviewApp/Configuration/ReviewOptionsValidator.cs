@@ -11,6 +11,10 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
     // The planner skips a file that would be cut to less than this, so a smaller budget would review nothing and say nothing.
     private const int MinimumUsefulBytes = 2_000;
 
+    // A cut slice under 2,000 bytes is left out as a line too long to show, which is true only when the file limit leaves room for many
+    // lines. Just above 2,000, almost every file that needs a cut would be left out for that reason, though its lines are short.
+    private const int MinimumFileBytes = 10_000;
+
     // The guidelines buffer is allocated at this size for every pull request.
     private const int MaxGuidelinesCharsCap = 200_000;
 
@@ -41,7 +45,7 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.HighRiskRepositories));
 
         RequireAtLeast(failures, "MaxChunkBytes", options.MaxChunkBytes, MinimumUsefulBytes);
-        RequireAtLeast(failures, "MaxFileBytes", options.MaxFileBytes, MinimumUsefulBytes);
+        RequireAtLeast(failures, "MaxFileBytes", options.MaxFileBytes, MinimumFileBytes);
         RequireAtLeast(failures, "MaxTotalBytes", options.MaxTotalBytes, Math.Max(options.MaxChunkBytes, 1));
         RequireAtLeast(failures, "MaxFiles", options.MaxFiles, 1);
         RequireAtLeast(failures, "MaxParallelChunks", options.MaxParallelChunks, 1);

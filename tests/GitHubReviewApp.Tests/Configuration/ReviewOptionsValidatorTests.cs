@@ -57,9 +57,9 @@ public class ReviewOptionsValidatorTests
         var options = new ReviewOptions
         {
             MaxChunkBytes = 2_000,
-            MaxFileBytes = 2_000,
+            MaxFileBytes = 10_000,
             MaxTotalBytes = 2_000,
-            MaxDiffBytes = 2_000,
+            MaxDiffBytes = 10_000,
             MaxListedFiles = 1,
             MaxDescriptionChars = 1,
             MaxGuidelinesChars = 200_000,
@@ -129,6 +129,34 @@ public class ReviewOptionsValidatorTests
 
         // Assert
         result.Failures.Should().ContainSingle().Which.Should().Contain("Review:MaxFileBytes").And.Contain("Review:MaxDiffBytes");
+    }
+
+    [Fact]
+    public void Validate_GivenAFileLimitUnderTenThousandBytes_Should_FailNamingTheSetting()
+    {
+        // Arrange — a cut slice under 2,000 bytes is left out as a line too long to show, which is true only when the limit leaves room for
+        // many lines: just above 2,000, almost every file that needs a cut would be left out that way, though its lines are short
+        var options = new ReviewOptions { MaxFileBytes = 9_999 };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().ContainSingle().Which.Should().Be("Review:MaxFileBytes must be at least 10000, but it is 9999.");
+    }
+
+    [Fact]
+    public void Validate_GivenAFileLimitOfTenThousandBytes_Should_Succeed()
+    {
+        // Arrange
+        var options = new ReviewOptions { MaxFileBytes = 10_000 };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert
+        result.Succeeded.Should().BeTrue();
     }
 
     [Fact]

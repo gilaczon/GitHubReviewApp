@@ -376,7 +376,7 @@ kinds, durations and failure-notice counters. Existing chunk, inline-comment and
 Static, in `appsettings.json` (validated at startup, unknown keys refused, as today):
 - `Claude`: `Effort` (high), `MaxOutputTokens` (32,000), `RequestTimeoutSeconds` (600), `MaxRetries` (1), `IsRefusalFallbackEnabled`
   (true), `Pricing` (5.10). `Model` is removed.
-- `Review`: `MaxDiffBytes` (180,000), `MaxFileBytes` (60,000), `MaxListedFiles` (1,000), `MaxDescriptionChars` (10,000),
+- `Review`: `MaxDiffBytes` (180,000), `MaxFileBytes` (60,000, at least 10,000), `MaxListedFiles` (1,000), `MaxDescriptionChars` (10,000),
   `OpusLineThreshold` (40), `HighRiskRepositories`, `MaxConcurrentModelRequests` (12), `MaxReviewDurationSeconds` (1,200),
   `AllowedAuthorAssociations` (unchanged). Removed: `MaxChunkBytes`, `MaxTotalBytes`, `MaxFiles`, `MaxParallelChunks`,
   `MaxInlineComments`, `MaxFindings`, `LargePullRequestFileThreshold`, `LargePullRequestLineThreshold`, `GuidelinePaths`,
