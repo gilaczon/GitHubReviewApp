@@ -3,7 +3,7 @@ namespace GitHubReviewApp.Services;
 /// <summary>Prices a run from the tokens its attempts used, with the static table in <c>Claude:Pricing</c> (design 5.10).</summary>
 public static class CostCalculator
 {
-    private const decimal TokensPerPrice = 1_000_000m;
+    private const decimal TokensPerMillion = 1_000_000m;
 
     /// <summary>
     /// The cost in US dollars of every attempt added up, each at its own model's prices: input, output, cache write and cache read tokens times their
@@ -29,7 +29,7 @@ public static class CostCalculator
             total += (attempt.Usage.InputTokens * price.InputPerMillionTokens
                 + attempt.Usage.OutputTokens * price.OutputPerMillionTokens
                 + attempt.Usage.CacheCreationInputTokens * price.CacheWritePerMillionTokens
-                + attempt.Usage.CacheReadInputTokens * price.CacheReadPerMillionTokens) / TokensPerPrice;
+                + attempt.Usage.CacheReadInputTokens * price.CacheReadPerMillionTokens) / TokensPerMillion;
         }
 
         return total;

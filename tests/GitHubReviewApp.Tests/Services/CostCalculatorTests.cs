@@ -55,7 +55,7 @@ public class CostCalculatorTests
     }
 
     [Fact]
-    public void CostOf_GivenAnUnpricedModel_Should_ReturnNullEvenWhenTheOtherAttemptHasAPrice()
+    public void CostOf_GivenAnUnpricedModel_Should_ReturnNull()
     {
         // Arrange — a partial sum would read as the real cost, so one unknown price makes the whole cost unknown
         var usage = new ClaudeUsage(InputTokens: 1_000, OutputTokens: 1_000, CacheReadInputTokens: 0, CacheCreationInputTokens: 0);

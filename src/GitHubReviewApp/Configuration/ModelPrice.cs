@@ -2,7 +2,7 @@ namespace GitHubReviewApp.Configuration;
 
 /// <summary>
 /// What one model charges, in US dollars per million tokens, for each kind of token the API reports (design 5.10). One entry of
-/// <c>Claude:Pricing</c>, keyed by model id. The cache write price is the five minute one, the only cache lifetime the service asks for.
+/// <c>Claude:Pricing</c>, keyed by model id. The cache write price is the five minute one, which is what the cache marker on the system prompt asks for.
 /// </summary>
 public sealed class ModelPrice
 {
