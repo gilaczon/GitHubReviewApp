@@ -347,6 +347,83 @@ public class ChecklistCommentFormatterTests
         MarkdownOracle.VisibleText(body).Should().Contain("Checklist (MoneyMe Code Review Checklist)").And.Contain("by dev1");
     }
 
+    [Theory]
+    [InlineData("# PASS - no concerns")]
+    [InlineData("###### PASS - no concerns")]
+    [InlineData("#\tPASS - no concerns")]
+    [InlineData("#")]
+    [InlineData("####### seven")]
+    [InlineData("[a]: https://example.com")]
+    [InlineData("[^1]: note")]
+    [InlineData("1. item")]
+    [InlineData("1) item")]
+    [InlineData("+ item")]
+    [InlineData("- item")]
+    [InlineData("* item")]
+    [InlineData("> quote")]
+    [InlineData("***")]
+    [InlineData("___")]
+    [InlineData("---")]
+    [InlineData("```")]
+    [InlineData("~~~")]
+    [InlineData("<div>x</div>")]
+    [InlineData("<!-- x -->")]
+    [InlineData("| a | b |")]
+    public void FormatReview_GivenASummaryThatWouldStartABlock_Should_ShowItAsText(string summary)
+    {
+        // Arrange — the summary has a line of its own, right under the app's headline: a heading there would out-shout the verdict, and a
+        // definition, a code fence or a block of HTML would show nothing of the text
+        var merged = TypicalReview() with { Summary = summary };
+
+        // Act
+        var body = Format(Context(), merged, [_doubleRefund, _untestedFailure]);
+        var checkRunSummary = ChecklistCommentFormatter.CheckRunSummary(body);
+
+        // Assert — the summary is shown as written, in the comment and in the check run, and nothing in it is live
+        HeadingCount(body).Should().Be(0);
+        ShownText(body).Should().Contain(summary);
+        MarkdownOracle.HasLiveContent(WithoutOwnReference(body)).Should().BeFalse();
+        HeadingCount(checkRunSummary).Should().Be(0);
+        ShownText(checkRunSummary).Should().Contain(summary);
+        MarkdownOracle.HasLiveContent(WithoutOwnReference(checkRunSummary)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void FormatReview_GivenASummaryAtItsLimitThatStartsWithAHeading_Should_ShowAllOfIt()
+    {
+        // Arrange — as long as the reader lets a summary be; the backslash that escapes the heading is not part of it
+        var summary = "# " + new string('x', ChecklistAnswerReader.MaxSummaryChars - 2);
+        var merged = TypicalReview() with { Summary = summary };
+
+        // Act
+        var body = Format(Context(), merged, [_doubleRefund, _untestedFailure]);
+
+        // Assert
+        ShownText(body).Should().Contain(summary);
+    }
+
+    [Theory]
+    [InlineData("src/`$ @octocat <img src=x> https://evil.example $`x`$ #12.cs")]
+    [InlineData("src/`$ @octocat\n\n<img src=x> https://evil.example $`x`$ #12.cs")]
+    public void FormatReview_GivenAHostileFindingPathThatMatchesNoChangedFile_Should_RenderNothingLive(string file)
+    {
+        // Arrange — the one text the model writes that is shown inside a code span: a path that matches no changed file is shown as the model
+        // wrote it. The second keeps a blank line, which would end the span's paragraph; the reader collapses it, but the formatter must not
+        // count on that.
+        var finding = _untestedFailure with { File = file };
+
+        // Act
+        var body = Format(Context(), TypicalReview(), [finding]);
+        var checkRunSummary = ChecklistCommentFormatter.CheckRunSummary(body);
+
+        // Assert — the path is shown, and none of it is live in the comment or in the check run
+        body.Should().Contain("https://evil.example");
+        MarkdownOracle.HasLiveContent(WithoutOwnReference(body)).Should().BeFalse();
+        MarkdownOracle.HasLiveMention(body).Should().BeFalse();
+        MarkdownOracle.HasLiveContent(WithoutOwnReference(checkRunSummary)).Should().BeFalse();
+        MarkdownOracle.HasLiveMention(checkRunSummary).Should().BeFalse();
+    }
+
     [Fact]
     public void FormatReview_GivenASecretInAFinding_Should_RedactIt()
     {
@@ -597,5 +674,19 @@ public class ChecklistCommentFormatterTests
     private static string WithoutOwnReference(string markdown)
     {
         return markdown.Replace("my-service #7 · ", "my-service · ", StringComparison.Ordinal);
+    }
+
+    /// <summary>The headings the markdown renders, of every level.</summary>
+    private static int HeadingCount(string markdown)
+    {
+        return Enumerable.Range(1, 6).Sum(level => MarkdownOracle.CountElements(markdown, $"h{level}"));
+    }
+
+    /// <summary>
+    /// What a reader sees outside code, without the zero-width spaces the sanitizer puts into a web address or a mention, which are invisible.
+    /// </summary>
+    private static string ShownText(string markdown)
+    {
+        return MarkdownOracle.VisibleText(markdown).Replace(MarkdownSanitizer.ZeroWidthSpace.ToString(), string.Empty, StringComparison.Ordinal);
     }
 }

@@ -319,10 +319,11 @@ there are none), the coverage line, the footer, then the hidden marker.
 - Every model-written and author-written string has what looks like a credential removed by `SecretRedactor.Redact` before it is
   cut to its limit: the model's text in the reader, which makes the cut (5.6.3), and every string again here, as a second layer for
   the model's text. It is then rendered with the existing `MarkdownSanitizer`: the summary, which has a line of its own, through the
-  block sanitizer `Neutralize`, which closes a code fence the text opens and escapes the marker of a list, a quote or a rule; the
-  notes, issues, fixes, coverage note, branch names, author's login and model ids through `NeutralizeInline`; and a finding's path
-  through `InlineCode`, inside backticks the app writes. So no mention, link, image, HTML or math becomes live. Fixed text the app
-  writes is not sanitised, nor are the repository's name, the PR number, the counts and the commit.
+  block sanitizer `Neutralize`, which closes a code fence the text opens and escapes the marker of a list, a quote or a rule, with a
+  heading or a code fence that the summary starts with escaped first, so that it shows as one paragraph of text whatever it starts
+  with; the notes, issues, fixes, coverage note, branch names, author's login and model ids through `NeutralizeInline`; and a
+  finding's path through `InlineCode`, inside backticks the app writes. So no mention, link, image, HTML or math becomes live. Fixed
+  text the app writes is not sanitised, nor are the repository's name, the PR number, the counts and the commit.
 
 **Upsert**: list the PR's issue comments (paginated, capped), take the oldest one written by this app's bot login whose body ends
 with a `moneyme-ai-review` marker, and replace its body; create one when there is none. Comments by anyone else are never edited,

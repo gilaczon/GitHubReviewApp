@@ -15,6 +15,7 @@ internal static class MarkdownOracle
         .UsePipeTables()
         .UseTaskLists()
         .UseEmphasisExtras()
+        .UseFootnotes()
         .Build();
 
     private static readonly Regex _codeOrPre = new(

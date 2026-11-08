@@ -19,6 +19,12 @@ internal static class ChecklistCommentFormatter
     private const string StricterRatingShown = "Reviewed twice; the stricter rating of each check is shown.";
     private const int ShortShaLength = 10;
 
+    // A heading (one to six number signs, then a space, a tab or nothing more) or a code fence (at least three backticks or tildes) at the
+    // start of a text.
+    private static readonly Regex _headingOrFence = new(
+        @"\A(?:#{1,6}(?=[ \t]|\z)|`{3}|~{3})",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     /// <summary>
     /// The comment for a finished review: the headline, the summary, whether the runs agreed, the eight checks, the counts, the findings to fix
     /// (<paramref name="shownFindings"/>, in the order given), what was not reviewed in full, the footer and the marker. A file a finding names
@@ -233,8 +239,14 @@ internal static class ChecklistCommentFormatter
 
     private static string SanitizeSummary(string summary)
     {
-        // The summary has a line of its own, where text can start a block, and a code fence opened there would run to the end of the comment.
-        // The block sanitizer closes such a fence and escapes the marker of a list, a quote or a rule; inline text needs neither.
-        return MarkdownSanitizer.Neutralize(SecretRedactor.Redact(summary.Trim()), ChecklistAnswerReader.MaxSummaryChars);
+        // The summary has a line of its own, under the headline, where text can start a block. The block sanitizer closes a code fence the
+        // text opens and escapes the marker of a list, a quote or a rule; inline text needs neither. It keeps a heading, which would
+        // out-shout the verdict, and a fence, which would show none of the text, so a summary that starts with either gets a backslash
+        // first. It then shows as one paragraph of text, whatever it starts with.
+        var text = SecretRedactor.Redact(summary.Trim());
+        var escape = _headingOrFence.IsMatch(text) ? @"\" : string.Empty;
+
+        // The backslash is markup and not part of the summary, so the summary's limit does not count it.
+        return MarkdownSanitizer.Neutralize(escape + text, ChecklistAnswerReader.MaxSummaryChars + escape.Length);
     }
 }
