@@ -118,12 +118,17 @@ All lengths are UTF-8 bytes unless stated.
    never included.
 2. Generated or vendored (existing rules). Ordered after docs.
 3. Tests (existing test-path rules). Ordered after the rest.
-4. Docs (`.md`, `.mdx`, `.markdown`, `.txt`, `.rst`, `.adoc`, or under a `docs/` folder). Ordered after tests.
+4. Docs (`.md`, `.mdx`, `.markdown`, `.txt`, `.rst`, `.adoc`, licence files, or under a `docs/` folder). Ordered after tests. A licence
+   file is one named `LICENSE`, `LICENCE`, `COPYING` or `NOTICE` (any case, any extension) or starting `LICENSE-` or `LICENCE-`: it is
+   documentation, though `license` is a personal-data keyword.
 5. Otherwise the first of these that matches, in this order: **auth**, **payments**, **cards**, **bank login**, **personal data**,
    **pipelines and workflows**, **config**, else **the rest**.
 
-High-risk matching (auth to personal data) splits the path into word tokens (on `/ \ . _ -`, spaces and camelCase boundaries,
-lower-cased) and looks for keywords. A starting set, tunable in code with tests:
+High-risk matching (auth to personal data) splits the path into lower-cased word tokens: at every character that is not a letter or
+digit (such as `/ \ . _ -` and spaces), at camelCase and acronym boundaries, and where a letter and a digit meet, so a run of digits
+is a token of its own (`OAuth2Client` gives `o`, `auth`, `2`, `client`). An acronym keeps a plural `s` that ends the word or is
+followed by a capital or a digit (`JWTsValidator` gives `jwts`, `validator`). A token matches a keyword when it is the keyword, or the
+keyword with one final `s` added (`jwts` matches `jwt`, `logins` matches `login`). A starting set, tunable in code with tests:
 
 | Tier | Keywords (tokens) |
 |---|---|
@@ -133,9 +138,14 @@ lower-cased) and looks for keywords. A starting set, tunable in code with tests:
 | bank login | bank, banks, banking, openbanking, bankstatement, bankstatements, basiq, illion, yodlee, proviso, creditsense, cdr, consent, consents |
 | personal data | customer, customers, pii, personal, person, profile, profiles, kyc, aml, address, addresses, dob, birth, birthdate, phone, mobile, email, emails, contact, contacts, applicant, applicants, borrower, borrowers, licence, license, passport, medicare, document, documents, verification, privacy, gdpr, tfn, employment, income, payslip, payslips, member, members |
 
-Pipelines and workflows: `.github/workflows/*`, `azure-pipelines*`, anything under `pipelines/` or `.azuredevops/`, `Dockerfile*` and
-`*.dockerfile`, `.gitlab-ci.yml`, `Jenkinsfile`, and infrastructure as code (`*.bicep`, `*.tf`, `*.tfvars`, ARM templates under
-`infra/` or `deploy/`, Helm charts, Kubernetes manifests). Config: `appsettings*.json`, `*.config`, `host.json`, `.env*`, `*.json`,
+Pipelines and workflows: `.github/workflows/*`, `azure-pipelines*`, `Dockerfile*` and `*.dockerfile`, `.gitlab-ci.yml`, `Jenkinsfile`,
+infrastructure as code anywhere (`*.bicep`, `*.bicepparam`, `*.tf`, `*.tfvars`), and the files kept in a folder named `pipelines`,
+`.azuredevops`, `infra`, `deploy`, `deployment`, `helm`, `charts`, `k8s` or `kubernetes` (at any depth, any case), such as ARM
+templates, Helm charts and Kubernetes manifests. Application code in such a folder is not a pipeline file because of the folder: a file
+with a source-code extension there (`src/components/charts/LineChart.vue`, `src/Api/Infra/AppDbContext.cs`) is classed as it would be
+anywhere else, unless it is a script or infrastructure code (`.sh`, `.bash`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`, `.bicep`,
+`.tf`). Everything else in those folders (YAML, JSON, Helm `.tpl`, files with no extension) stays a pipeline file. Config:
+`appsettings*.json`, `*.config`, `host.json`, `.env*`, `*.json`,
 `*.yml`, `*.yaml`, `*.xml`, `*.toml`, `*.ini`, `*.properties`, project and build files (`*.csproj`, `*.props`, `*.targets`, `*.sln`,
 `*.slnx`, `package.json`, `global.json`, `nuget.config`).
 
@@ -144,7 +154,9 @@ Pipelines and workflows: `.github/workflows/*`, `azure-pipelines*`, anything und
 **Diff budget.** Walk the ordered files and include each file's rendered diff while it fits in `Review:MaxDiffBytes` (180,000).
 Rendering reuses `DiffRenderer` (every added or context line prefixed with its line number in the new file). A file whose rendered
 diff is over `Review:MaxFileBytes` (60,000) is cut at a line boundary and marked partial; a cut slice under 2,000 bytes is left out
-instead. A file that does not fit what is left is left out and the walk continues, since a later, smaller file may still fit. Files
+instead and listed as "a line too long to show": a line near the top of the file is longer than what is left of the file limit, as in
+a bundled script or a one-line JSON file. That is checked before the budget, so it is the reason given even when the budget has run
+out too. A file that does not fit what is left is left out and the walk continues, since a later, smaller file may still fit. Files
 with no patch from GitHub (rename only, binary, too large to diff) are listed as "no diff from GitHub".
 
 **User message**, in the spec's order. Every author-controlled string (title, description, branch names, author login, file paths,
@@ -168,7 +180,8 @@ head_sha: {40-hex}
 
 <changed_files>
 {n} files changed, highest risk first. {a} diffs included in full, {b} partly, {c} left out.
-- {path} ({status}, +{add} -{del}, {tier}): {included | partial, cut at 60 KB | left out: over the 180 KB limit | left out: lockfile, not read | left out: binary or minified, not read | left out: no diff from GitHub}
+{only when the PR changed more files than GitHub listed: GitHub listed only {listed} of the {total} changed files.}
+- {path} ({status}, +{add} -{del}, {tier}): {included | partial, cut at 60 KB | left out: over the 180 KB limit | left out: a line too long to show | left out: lockfile, not read | left out: binary or minified, not read | left out: no diff from GitHub}
 ...
 </changed_files>
 
@@ -177,7 +190,10 @@ head_sha: {40-hex}
 </diff>
 ```
 
-The changed-files list is capped at `Review:MaxListedFiles` (1,000) lines, ending with "and {n} more files not listed".
+The changed-files list is capped at `Review:MaxListedFiles` (1,000) lines, ending with "and {n} more files not listed". A count of one
+is singular: "1 file changed", "1 diff included in full", "and 1 more file not listed"; every other number keeps the plural. GitHub
+lists at most 3,000 of a PR's files, so when the PR's changed-file count is larger than the number of files listed, the line after the
+counts line says "GitHub listed only {listed} of the {total} changed files.", both numbers written without a thousands separator.
 
 ### 5.4 Model choice
 
