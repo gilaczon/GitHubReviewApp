@@ -256,6 +256,10 @@ For each run with outcome `Completed`:
 - `summary` cut to 240 characters, `coverage_note` to 160, findings to at most 8 entries; in a finding `file` 250, `issue` 160,
   `fix` 120 characters. A finding whose `check` is not one of the eight is dropped. A finding `line` below 1 reads as 0, which the
   comment shows as no line.
+- Every text kept (a note, the summary, the coverage note, and a finding's file, issue and fix) has what looks like a credential
+  replaced by `SecretRedactor.Redact` after its whitespace is collapsed and before it is cut. The redactor knows a key by its whole
+  shape, so a key that a cut had shortened would no longer match, and the part before the cut would be posted. The comment redacts
+  again (5.8).
 - A JSON property whose name cannot be read as text (the escape of half a surrogate pair) is ignored as if it were absent, and the
   object's other properties are still read. Reading never throws.
 - A check the run left out is "missing" for that run (see merging).
@@ -306,14 +310,19 @@ there are none), the coverage line, the footer, then the hidden marker.
 - Finding line: `- {icon of its check} {Check label} `{file}:{line}`: {issue} Fix: {fix}`; a line of 0 or less shows the file only.
   A file the model named is matched to a changed file when possible (the existing `PathResolver`), else shown as given.
 - Coverage line: shown only when some diff was left out or cut. It uses the stricter run's coverage note; if that is empty, the code
-  writes one: "{n} of {total} changed files were not reviewed in full."
+  writes one: "{n} of {total} changed files were not reviewed in full.", in the singular where a count is one ("1 of 5 changed files
+  was not reviewed in full.", "1 of 1 changed file was not reviewed in full.").
 - Footer: `{owner}/{repo} #{number} · {head} → {base} · by {author} · {files} files +{added} -{deleted} ({included} reviewed) ·
-  {model} at {sha first 10}`, where `included` counts files whose diff was sent in full or in part, and `model` is the answering
-  model, or both joined with " + " when the runs differed (a fallback).
+  {model} at {sha first 10}` ("1 file" for one), where `included` counts files whose diff was sent in full or in part, and `model` is
+  the answering model, or both joined with " + " when the runs differed (a fallback).
 - Marker, the last line: `<!-- moneyme-ai-review sha={40-hex} outcome={reviewed|failed} -->`.
-- Every model-written and author-written string is cut to its limit, passed through `SecretRedactor.Redact`, then rendered with
-  the existing `MarkdownSanitizer` (inline text through `NeutralizeInline`, paths and refs through `InlineCode`), so no mention, link,
-  image, HTML or math becomes live. Fixed text the app writes is not sanitised.
+- Every model-written and author-written string has what looks like a credential removed by `SecretRedactor.Redact` before it is
+  cut to its limit: the model's text in the reader, which makes the cut (5.6.3), and every string again here, as a second layer for
+  the model's text. It is then rendered with the existing `MarkdownSanitizer`: the summary, which has a line of its own, through the
+  block sanitizer `Neutralize`, which closes a code fence the text opens and escapes the marker of a list, a quote or a rule; the
+  notes, issues, fixes, coverage note, branch names, author's login and model ids through `NeutralizeInline`; and a finding's path
+  through `InlineCode`, inside backticks the app writes. So no mention, link, image, HTML or math becomes live. Fixed text the app
+  writes is not sanitised, nor are the repository's name, the PR number, the counts and the commit.
 
 **Upsert**: list the PR's issue comments (paginated, capped), take the oldest one written by this app's bot login whose body ends
 with a `moneyme-ai-review` marker, and replace its body; create one when there is none. Comments by anyone else are never edited,
