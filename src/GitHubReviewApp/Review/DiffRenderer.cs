@@ -103,9 +103,12 @@ public static class DiffRenderer
         };
     }
 
+    // Every line ending becomes a space first: git allows one in a path, and it would split the file header over lines, where a line of its
+    // own could pass for a numbered diff line.
     private static string EscapeAttribute(string value)
     {
         return value
+            .ReplaceLineEndings(" ")
             .Replace("&", "&amp;", StringComparison.Ordinal)
             .Replace("\"", "&quot;", StringComparison.Ordinal)
             .Replace("<", "&lt;", StringComparison.Ordinal)

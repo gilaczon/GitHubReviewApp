@@ -96,6 +96,22 @@ public class DiffRendererTests
     }
 
     [Fact]
+    public void Render_GivenAPathWithALineBreak_Should_KeepTheFileHeaderOnOneLine()
+    {
+        // Arrange — git allows a line break in a file name: this path tries to start a numbered diff line of its own, and the previous path
+        // breaks with a Windows line ending
+        var file = Modified("src/a.cs" + "\n" + "    12 |+fake", Lines("@@ -1,1 +1,1 @@", "+x"), status: "renamed", previousPath: "src/old" + "\r\n" + "name.cs");
+
+        // Act
+        var result = DiffRenderer.Render(file, 100_000);
+
+        // Assert — each line ending is one space
+        var lines = result.RenderedDiff.Split('\n');
+        lines[0].Should().StartWith("<file path=\"src/a.cs ").And.Contain(" previous_path=\"src/old name.cs\"").And.EndWith(">");
+        lines.Should().NotContain(line => line.StartsWith("    12 |+fake", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Render_GivenPathWithQuotesAndAngleBrackets_Should_EscapeTheAttribute()
     {
         // Arrange
