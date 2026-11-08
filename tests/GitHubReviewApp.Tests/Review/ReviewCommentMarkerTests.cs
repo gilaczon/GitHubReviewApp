@@ -23,6 +23,40 @@ public class ReviewCommentMarkerTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("0123456789abcdef0123456789abcdef0123456")]
+    [InlineData("0123456789abcdef0123456789abcdef012345678")]
+    [InlineData("0123456789abcdef0123456789abcdef0123456g")]
+    [InlineData("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]
+    [InlineData(" 0123456789abcdef0123456789abcdef01234567")]
+    public void For_GivenAShaThatIsNotFortyHexCharacters_Should_Throw(string headSha)
+    {
+        // Arrange — none, one character short, one long, forty with a letter that is not hex, a SHA-256 commit id, and a full sha after a
+        // space: TryRead reads none of them back, so a record written with one would never be found and every push would add a comment
+
+        // Act & Assert
+        var act = () => ReviewCommentMarker.For(headSha, ReviewRecordOutcome.Reviewed);
+        act.Should().Throw<ArgumentException>().WithParameterName("headSha");
+    }
+
+    [Theory]
+    [InlineData("0123456789abcdef0123456789abcdef01234567", ReviewRecordOutcome.Reviewed)]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF01234567", ReviewRecordOutcome.Failed)]
+    public void For_GivenAFortyHexSha_Should_WriteAMarkerThatTryReadReadsBack(string headSha, ReviewRecordOutcome outcome)
+    {
+        // Arrange — a sha in lower case, as GitHub writes it, and in upper case
+
+        // Act
+        var marker = ReviewCommentMarker.For(headSha, outcome);
+        var isRead = ReviewCommentMarker.TryRead(marker, out var readSha, out var readOutcome);
+
+        // Assert
+        isRead.Should().BeTrue();
+        readSha.Should().Be(headSha);
+        readOutcome.Should().Be(outcome);
+    }
+
+    [Theory]
     [InlineData("<!-- moneyme-ai-review sha=0123456789abcdef0123456789abcdef01234567 outcome=reviewed -->", ReviewRecordOutcome.Reviewed)]
     [InlineData("<!-- moneyme-ai-review sha=0123456789abcdef0123456789abcdef01234567 outcome=failed -->", ReviewRecordOutcome.Failed)]
     public void TryRead_GivenTheMarkerAsTheLastLine_Should_ReadShaAndOutcome(string marker, ReviewRecordOutcome expectedOutcome)
