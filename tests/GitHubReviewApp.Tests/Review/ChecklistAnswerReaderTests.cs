@@ -330,8 +330,8 @@ public class ChecklistAnswerReaderTests
     [Fact]
     public void Read_GivenACheckPropertyNamedWithHalfASurrogatePair_Should_StillReadTheCheck()
     {
-        // Arrange — JsonElement.TryGetProperty throws only for a bad name that begins as the name it looks up does and is longer than it, so
-        // there is one for "id" (and so for ReadText) and one for "serious"; both come after the properties that are read
+        // Arrange — the two extra bad names, after the properties that are read, make each lookup site the check goes through (ReadText and
+        // the "serious" flag) meet a name on which JsonElement.TryGetProperty throws
         var entry = $$"""{"id":"security","status":"concern","note":"Logs the token.","i{{Backslash}}ud800":1,"se{{Backslash}}ud800":1}""";
         var text = Answer(Entries(entry));
 
@@ -345,7 +345,8 @@ public class ChecklistAnswerReaderTests
     [Fact]
     public void Read_GivenAFindingPropertyNamedWithHalfASurrogatePair_Should_StillReadTheFinding()
     {
-        // Arrange — one bad name begins as "check" does (for ReadText) and one as "line" does, and both come after the properties that are read
+        // Arrange — the two extra bad names, after the properties that are read, make each lookup site the finding goes through (ReadText and
+        // ReadLine) meet a name on which JsonElement.TryGetProperty throws
         var entry = $$"""{"check":"functionality","file":"src/Foo.cs","line":11,"issue":"Retries twice.","fix":"Retry once.","c{{Backslash}}ud800":1,"l{{Backslash}}ud800":1}""";
         var text = Answer(AllEight(), Entries(entry));
 
@@ -354,6 +355,37 @@ public class ChecklistAnswerReaderTests
 
         // Assert
         result.Answer!.Findings.Should().Equal(new ChecklistFinding(CheckId.Functionality, "src/Foo.cs", 11, "Retries twice.", "Retry once."));
+    }
+
+    [Theory]
+    [InlineData(Backslash + "udc00")]
+    [InlineData(Backslash + "ud800A")]
+    [InlineData("i" + Backslash + "udc00")]
+    public void Read_GivenACheckPropertyWithAnotherUnreadableName_Should_StillReadTheCheck(string name)
+    {
+        // Arrange — the escape of a lone low surrogate, of a high surrogate followed by a letter, and of a low surrogate after a letter: none
+        // stands for valid UTF-16 text
+        var entry = $$"""{"id":"security","status":"concern","note":"Logs the token.","{{name}}":1}""";
+        var text = Answer(Entries(entry));
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert
+        result.Answer!.Rated.Should().BeEquivalentTo(Ratings(new RatedCheck(CheckId.Security, CheckStatus.Concern, "Logs the token.", false)));
+    }
+
+    [Fact]
+    public void Read_GivenTheSummaryTwice_Should_ReadTheLastOne()
+    {
+        // Arrange — JSON allows a property name twice; the reader takes the last, as JsonElement.TryGetProperty does
+        var text = $$"""{"summary":"Adds retries.","summary":"Adds retries to the payment client.","checks":{{AllEight()}},"findings":[],"coverage_note":""}""";
+
+        // Act
+        var result = ChecklistAnswerReader.Read(text);
+
+        // Assert
+        result.Answer!.Summary.Should().Be("Adds retries to the payment client.");
     }
 
     [Fact]
