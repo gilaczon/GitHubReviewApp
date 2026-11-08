@@ -43,6 +43,25 @@ internal sealed record GitHubAppJwt(string Algorithm, string Issuer, DateTimeOff
         }
     }
 
+    /// <summary>A JWT for the given app, signed the way GitHub expects, that is valid now and for five minutes. For tests that call the app endpoints directly.</summary>
+    public static string Sign(string appId, string privateKeyPem)
+    {
+        var issuedAt = DateTimeOffset.UtcNow;
+        var header = Base64UrlEncode(Encoding.UTF8.GetBytes("""{"alg":"RS256","typ":"JWT"}"""));
+        var payload = Base64UrlEncode(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            iss = appId,
+            iat = issuedAt.AddSeconds(-30).ToUnixTimeSeconds(),
+            exp = issuedAt.AddMinutes(5).ToUnixTimeSeconds()
+        })));
+
+        using var rsa = RSA.Create();
+        rsa.ImportFromPem(privateKeyPem);
+        var signature = Base64UrlEncode(rsa.SignData(Encoding.ASCII.GetBytes($"{header}.{payload}"), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+
+        return $"{header}.{payload}.{signature}";
+    }
+
     /// <summary>The reason GitHub would reject this JWT at <paramref name="now"/>, or null when it would accept it.</summary>
     public string? Problem(string expectedAppId, DateTimeOffset now)
     {
@@ -72,6 +91,11 @@ internal sealed record GitHubAppJwt(string Algorithm, string Issuer, DateTimeOff
         }
 
         return ExpiresAt > now + _maxLifetime ? "exp is more than ten minutes away" : null;
+    }
+
+    private static string Base64UrlEncode(byte[] bytes)
+    {
+        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
     private static byte[] Base64UrlDecode(string text)

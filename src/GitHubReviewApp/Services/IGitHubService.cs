@@ -27,6 +27,25 @@ public interface IGitHubService
         string owner, string repo, int prNumber, string body, string token, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Lists the comments on the pull request's conversation, oldest first, reading every page of 100 up to 30 pages. A comment GitHub gives no
+    /// author keeps an empty login.
+    /// </summary>
+    Task<IReadOnlyList<IssueComment>> ListIssueCommentsAsync(
+        string owner, string repo, int prNumber, string token, CancellationToken cancellationToken);
+
+    /// <summary>Posts a comment on the pull request conversation and returns its id.</summary>
+    Task<long> CreateIssueCommentAsync(
+        string owner, string repo, int prNumber, string body, string token, CancellationToken cancellationToken);
+
+    /// <summary>Replaces the body of a comment on the pull request conversation. A comment that is gone is an error.</summary>
+    Task UpdateIssueCommentAsync(
+        string owner, string repo, long commentId, string body, string token, CancellationToken cancellationToken);
+
+    /// <summary>Creates a completed check run on the request's commit and returns its id.</summary>
+    Task<long> CreateCheckRunAsync(
+        string owner, string repo, CheckRunRequest request, string token, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Reads the repository's review guidelines at the given commit. No guidelines file is not an error. A refusal that will not
     /// change (the app may not read the file) is reported in the result so the review can say the rules were not applied. A failure that can
     /// clear up on its own (GitHub unavailable, rate limited, a timeout) is thrown so the message is retried, since this runs before any model call.

@@ -47,8 +47,24 @@ public class RecordedGitHubResponseTests
 
         // Assert
         result.Should().Be(new PullRequestInfo(
-            "closed", false, RecordedGitHub.Title, RecordedGitHub.HeadSha, RecordedGitHub.BaseSha, ChangedFileCount: 9, Additions: 78, Deletions: 80));
+            "closed", false, RecordedGitHub.Title, RecordedGitHub.HeadSha, RecordedGitHub.BaseSha, ChangedFileCount: 9, Additions: 78, Deletions: 80,
+            BaseRef: "main", HeadRef: "feature-branch"));
         result.IsOpen.Should().BeFalse("it was merged when it was recorded");
+    }
+
+    [Fact]
+    public async Task GetPullRequestAsync_GivenTheRecordedResponse_Should_ReadTheAuthorAndBranches()
+    {
+        // Arrange
+
+        // Act
+        var result = await ReadPullRequestAsync();
+
+        // Assert — the recording keeps the branch names but not the description or the author (Fixtures/GitHub/README.md), so those read as empty
+        result.BaseRef.Should().Be("main");
+        result.HeadRef.Should().Be("feature-branch");
+        result.AuthorLogin.Should().BeEmpty();
+        result.Body.Should().BeEmpty();
     }
 
     // ── The files ────────────────────────────────────────────────────────────

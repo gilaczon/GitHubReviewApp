@@ -42,6 +42,9 @@ internal sealed class FakeBackend : HttpMessageHandler
     private readonly List<RecordedCall> _unroutedCalls = [];
     private readonly List<string> _postedReviewJson = [];
     private readonly HashSet<long> _deletedReviewIds = [];
+    private readonly List<IssueComment> _postedIssueComments = [];
+    private readonly Dictionary<long, string> _updatedCommentBodies = [];
+    private int _checkRunCount;
 
     /// <summary>Checked first, in order. Return null to fall through to the default behavior.</summary>
     public List<Func<RecordedCall, HttpResponseMessage?>> Overrides { get; } = [];
@@ -56,6 +59,15 @@ internal sealed class FakeBackend : HttpMessageHandler
 
     /// <summary>Reviews that existed before the run. Reviews the app posts during the run are listed after these.</summary>
     public string ReviewsResponse { get; set; } = "[]";
+
+    /// <summary>Comments that existed on the pull request before the run. Comments the app posts during the run are listed after these.</summary>
+    public List<IssueComment> InitialComments { get; } = [];
+
+    /// <summary>
+    /// Whether the installation has granted the app the checks permission. When it has not, a request for an installation token that asks for
+    /// <c>checks</c> is refused the way GitHub refuses a permission the installation has not accepted.
+    /// </summary>
+    public bool IsChecksPermissionGranted { get; set; } = true;
 
     public Func<string, HttpResponseMessage> ContentsHandler { get; set; } = path =>
         path.EndsWith("CLAUDE.md", StringComparison.Ordinal)
@@ -95,6 +107,14 @@ internal sealed class FakeBackend : HttpMessageHandler
 
     public IReadOnlyList<RecordedCall> PostedComments => Calls
         .Where(call => call.Method == HttpMethod.Post && call.Path.EndsWith($"/issues/{PrNumber}/comments", StringComparison.Ordinal))
+        .ToList();
+
+    public IReadOnlyList<RecordedCall> UpdatedComments => Calls
+        .Where(call => call.Method == HttpMethod.Patch && Regex.IsMatch(call.Path, @"^/repos/[^/]+/[^/]+/issues/comments/\d+$"))
+        .ToList();
+
+    public IReadOnlyList<RecordedCall> CheckRuns => Calls
+        .Where(call => call.Method == HttpMethod.Post && call.Path == $"/repos/{Owner}/{Repo}/check-runs")
         .ToList();
 
     public static string PullRequestJson(string headSha = HeadSha, string state = "open", bool isDraft = false, int changedFiles = 2, int additions = 6, int deletions = 5)
@@ -211,6 +231,11 @@ internal sealed class FakeBackend : HttpMessageHandler
 
         if (call.Method == HttpMethod.Post && Regex.IsMatch(path, @"^/app/installations/\d+/access_tokens$"))
         {
+            if (!IsChecksPermissionGranted && RequestsChecksPermission(call))
+            {
+                return Unprocessable("The permissions requested are not granted to this installation.");
+            }
+
             return Json(JsonSerializer.Serialize(new { token = InstallationToken, expires_at = DateTimeOffset.UtcNow.AddHours(1) }), HttpStatusCode.Created);
         }
 
@@ -239,9 +264,24 @@ internal sealed class FakeBackend : HttpMessageHandler
             return DeleteReview(long.Parse(deletion.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
         }
 
+        if (call.Method == HttpMethod.Get && path == $"/repos/{Owner}/{Repo}/issues/{PrNumber}/comments")
+        {
+            return ListIssueComments(call);
+        }
+
         if (call.Method == HttpMethod.Post && path == $"/repos/{Owner}/{Repo}/issues/{PrNumber}/comments")
         {
             return RecordIssueComment(call);
+        }
+
+        if (call.Method == HttpMethod.Patch && Regex.Match(path, "^" + Regex.Escape($"/repos/{Owner}/{Repo}/issues/comments/") + @"(\d+)$") is { Success: true } update)
+        {
+            return UpdateIssueComment(call, long.Parse(update.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (call.Method == HttpMethod.Post && path == $"/repos/{Owner}/{Repo}/check-runs")
+        {
+            return RecordCheckRun();
         }
 
         if (call.Method == HttpMethod.Get && path.StartsWith($"/repos/{Owner}/{Repo}/contents/", StringComparison.Ordinal))
@@ -255,6 +295,75 @@ internal sealed class FakeBackend : HttpMessageHandler
         }
 
         return Json("{\"message\":\"Not routed by the test backend\"}", HttpStatusCode.NotFound);
+    }
+
+    private static bool RequestsChecksPermission(RecordedCall call)
+    {
+        return call.Body is not null
+            && call.BodyJson().TryGetProperty("permissions", out var permissions)
+            && permissions.ValueKind == JsonValueKind.Object
+            && permissions.TryGetProperty("checks", out _);
+    }
+
+    private HttpResponseMessage ListIssueComments(RecordedCall call)
+    {
+        var query = System.Web.HttpUtility.ParseQueryString(call.Uri.Query);
+        var perPage = int.TryParse(query["per_page"], out var requestedPerPage) ? requestedPerPage : 30;
+        var page = int.TryParse(query["page"], out var requestedPage) ? requestedPage : 1;
+
+        lock (_gate)
+        {
+            var comments = InitialComments.Concat(_postedIssueComments)
+                .Select(comment => new IssueComment(
+                    comment.Id, comment.AuthorLogin, _updatedCommentBodies.GetValueOrDefault(comment.Id, comment.Body)))
+                .Skip((page - 1) * perPage)
+                .Take(perPage)
+                .Select(comment => new
+                {
+                    id = comment.Id,
+                    body = comment.Body,
+                    user = comment.AuthorLogin.Length == 0 ? null : new { login = comment.AuthorLogin, type = "Bot" }
+                });
+
+            return Json(JsonSerializer.Serialize(comments));
+        }
+    }
+
+    private HttpResponseMessage UpdateIssueComment(RecordedCall call, long commentId)
+    {
+        var request = call.BodyJson();
+
+        if (!request.TryGetProperty("body", out var body) || body.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(body.GetString()))
+        {
+            return Unprocessable("Body cannot be blank");
+        }
+
+        if (ValidateText(request, "Body") is { } tooLong)
+        {
+            return tooLong;
+        }
+
+        lock (_gate)
+        {
+            if (!InitialComments.Concat(_postedIssueComments).Any(comment => comment.Id == commentId))
+            {
+                return Json("{\"message\":\"Not Found\"}", HttpStatusCode.NotFound);
+            }
+
+            _updatedCommentBodies[commentId] = body.GetString()!;
+        }
+
+        return Json($"{{\"id\":{commentId}}}");
+    }
+
+    private HttpResponseMessage RecordCheckRun()
+    {
+        lock (_gate)
+        {
+            _checkRunCount++;
+
+            return Json($"{{\"id\":{9000 + _checkRunCount}}}", HttpStatusCode.Created);
+        }
     }
 
     private string ListReviews()
@@ -325,7 +434,19 @@ internal sealed class FakeBackend : HttpMessageHandler
             return Unprocessable("Body cannot be blank");
         }
 
-        return ValidateText(request, "Body") ?? Json("{\"id\":2}", HttpStatusCode.Created);
+        if (ValidateText(request, "Body") is { } tooLong)
+        {
+            return tooLong;
+        }
+
+        lock (_gate)
+        {
+            var id = 5000 + _postedIssueComments.Count;
+
+            _postedIssueComments.Add(new IssueComment(id, AppLogin, body.GetString()!));
+
+            return Json($"{{\"id\":{id}}}", HttpStatusCode.Created);
+        }
     }
 
     /// <summary>The refusals GitHub gives a review it cannot take. Null when the review would be accepted.</summary>

@@ -9,13 +9,19 @@ internal sealed class GitHubPullRequestDto
     public bool IsDraft { get; init; }
 
     [JsonPropertyName("title")]
-    public string Title { get; init; } = string.Empty;
+    public string? Title { get; init; }
+
+    [JsonPropertyName("body")]
+    public string? Body { get; init; }
+
+    [JsonPropertyName("user")]
+    public GitHubUserDto? User { get; init; }
 
     [JsonPropertyName("head")]
-    public GitHubRefDto Head { get; init; } = new();
+    public GitHubRefDto? Head { get; init; }
 
     [JsonPropertyName("base")]
-    public GitHubRefDto Base { get; init; } = new();
+    public GitHubRefDto? Base { get; init; }
 
     [JsonPropertyName("changed_files")]
     public int ChangedFiles { get; init; }

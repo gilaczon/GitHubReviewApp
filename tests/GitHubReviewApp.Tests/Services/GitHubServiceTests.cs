@@ -78,6 +78,63 @@ public class GitHubServiceTests
     }
 
     [Fact]
+    public async Task GetPullRequestAsync_GivenAPullRequest_Should_ReadTheBodyAuthorAndBranchNames()
+    {
+        // Arrange
+        const string Json = """
+            {
+              "state": "open", "draft": false, "title": "Add retries", "body": "Retries failed calls.",
+              "user": { "login": "octocat" },
+              "head": { "sha": "headsha1", "ref": "feature/retries" }, "base": { "sha": "basesha1", "ref": "main" },
+              "changed_files": 2, "additions": 6, "deletions": 5
+            }
+            """;
+        var sut = BuildReviewSut(new TestHttpMessageHandler(Json));
+
+        // Act
+        var result = await sut.GetPullRequestAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        result.Should().Be(new PullRequestInfo(
+            "open", false, "Add retries", "headsha1", "basesha1", 2, 6, 5,
+            Body: "Retries failed calls.", AuthorLogin: "octocat", BaseRef: "main", HeadRef: "feature/retries"));
+    }
+
+    [Fact]
+    public async Task GetPullRequestAsync_GivenNullTextAndNoUser_Should_TurnEachIntoAnEmptyString()
+    {
+        // Arrange — GitHub sends a null body for a pull request without a description and a null user for a deleted account
+        const string Json = """
+            {
+              "state": "open", "draft": false, "title": null, "body": null, "user": null,
+              "head": { "sha": null, "ref": null }, "base": { "sha": null, "ref": null },
+              "changed_files": 0, "additions": 0, "deletions": 0
+            }
+            """;
+        var sut = BuildReviewSut(new TestHttpMessageHandler(Json));
+
+        // Act
+        var result = await sut.GetPullRequestAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        result.Should().Be(new PullRequestInfo("open", false, string.Empty, string.Empty, string.Empty, 0, 0, 0));
+    }
+
+    [Fact]
+    public async Task GetPullRequestAsync_GivenAUserWithoutALogin_Should_ReadAnEmptyAuthorLogin()
+    {
+        // Arrange
+        const string Json = """{ "state": "open", "user": { "login": null }, "head": { "sha": "h" }, "base": { "sha": "b" } }""";
+        var sut = BuildReviewSut(new TestHttpMessageHandler(Json));
+
+        // Act
+        var result = await sut.GetPullRequestAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        result.AuthorLogin.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetPullRequestAsync_GivenNotFound_Should_ThrowGitHubApiExceptionWith404()
     {
         // Arrange
@@ -449,6 +506,234 @@ public class GitHubServiceTests
 
         // Assert
         (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // ── ListIssueCommentsAsync ───────────────────────────────────────────────
+
+    private static string CommentPage(int count, int startId)
+    {
+        return JsonSerializer.Serialize(
+            Enumerable.Range(startId, count).Select(i => new { id = i, body = $"comment {i}", user = new { login = "octocat" } }));
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_GivenTwoPages_Should_ReturnEveryCommentWithItsAuthorAndBody()
+    {
+        // Arrange
+        var handler = new TestHttpMessageHandler(req =>
+            req.RequestUri!.Query.EndsWith("&page=1", StringComparison.Ordinal) ? JsonResponse(CommentPage(100, 1)) : JsonResponse(CommentPage(2, 101)));
+        var sut = BuildReviewSut(handler);
+
+        // Act
+        var comments = await sut.ListIssueCommentsAsync("my-org", "my-service", 7, Token, CancellationToken.None);
+
+        // Assert
+        comments.Should().HaveCount(102);
+        comments[0].Should().Be(new IssueComment(1, "octocat", "comment 1"));
+        comments[101].Should().Be(new IssueComment(102, "octocat", "comment 102"));
+        handler.Requests.Select(request => request.RequestUri!.PathAndQuery).Should().Equal(
+            "/repos/my-org/my-service/issues/7/comments?per_page=100&page=1",
+            "/repos/my-org/my-service/issues/7/comments?per_page=100&page=2");
+        handler.Requests.Should().OnlyContain(request => request.Method == HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_GivenACommentFromADeletedUser_Should_KeepItWithAnEmptyLogin()
+    {
+        // Arrange
+        const string Json = """
+            [
+              { "id": 11, "body": "from a person", "user": { "login": "octocat" } },
+              { "id": 12, "body": "from nobody", "user": null },
+              { "id": 13, "body": null, "user": { "login": null } }
+            ]
+            """;
+        var sut = BuildReviewSut(new TestHttpMessageHandler(Json));
+
+        // Act
+        var comments = await sut.ListIssueCommentsAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        comments.Should().Equal(
+            new IssueComment(11, "octocat", "from a person"),
+            new IssueComment(12, string.Empty, "from nobody"),
+            new IssueComment(13, string.Empty, string.Empty));
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_GivenAnEmptyPageAfterAFullOne_Should_StopWithoutWarning()
+    {
+        // Arrange
+        var logger = new ListLogger<GitHubService>();
+        var handler = new TestHttpMessageHandler(req =>
+            req.RequestUri!.Query.EndsWith("&page=1", StringComparison.Ordinal) ? JsonResponse(CommentPage(100, 1)) : JsonResponse("[]"));
+        var sut = BuildReviewSut(handler, logger: logger);
+
+        // Act
+        var comments = await sut.ListIssueCommentsAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        comments.Should().HaveCount(100);
+        handler.Requests.Should().HaveCount(2);
+        logger.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_GivenEveryPageIsFull_Should_StopAtThirtyPagesAndWarnThatTheNewestWereNotRead()
+    {
+        // Arrange — comments are listed oldest first, so the unread ones are the newest and an earlier review could go unseen
+        var logger = new ListLogger<GitHubService>();
+        var handler = new TestHttpMessageHandler(_ => JsonResponse(CommentPage(100, 1)));
+        var sut = BuildReviewSut(handler, logger: logger);
+
+        // Act
+        var comments = await sut.ListIssueCommentsAsync("my-org", "my-repo", 7, Token, CancellationToken.None);
+
+        // Assert
+        handler.Requests.Should().HaveCount(30);
+        handler.LastRequest!.RequestUri!.Query.Should().EndWith("&page=30");
+        comments.Should().HaveCount(3_000);
+        var warning = logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning).Which;
+        warning.Message.Should().Contain("my-org/my-repo#7").And.Contain("3000").And.Contain("may be missed");
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_GivenGitHubRefuses_Should_ThrowGitHubApiException()
+    {
+        // Arrange
+        var sut = BuildReviewSut(new TestHttpMessageHandler("{}", HttpStatusCode.Forbidden));
+
+        // Act
+        var act = () => sut.ListIssueCommentsAsync("o", "r", 1, Token, CancellationToken.None);
+
+        // Assert
+        (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // ── CreateIssueCommentAsync / UpdateIssueCommentAsync ────────────────────
+
+    [Fact]
+    public async Task CreateIssueCommentAsync_GivenABody_Should_PostItAndReturnTheNewId()
+    {
+        // Arrange
+        string? capturedBody = null;
+        var handler = new TestHttpMessageHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return JsonResponse("{\"id\": 4821}", HttpStatusCode.Created);
+        });
+        var sut = BuildReviewSut(handler);
+
+        // Act
+        var id = await sut.CreateIssueCommentAsync("my-org", "my-service", 7, "the review", Token, CancellationToken.None);
+
+        // Assert
+        id.Should().Be(4821);
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.PathAndQuery.Should().Be("/repos/my-org/my-service/issues/7/comments");
+        JsonDocument.Parse(capturedBody!).RootElement.GetProperty("body").GetString().Should().Be("the review");
+    }
+
+    [Fact]
+    public async Task CreateIssueCommentAsync_GivenGitHubRefuses_Should_ThrowGitHubApiException()
+    {
+        // Arrange
+        var sut = BuildReviewSut(new TestHttpMessageHandler("{\"message\":\"Body cannot be blank\"}", HttpStatusCode.UnprocessableEntity));
+
+        // Act
+        var act = () => sut.CreateIssueCommentAsync("o", "r", 1, " ", Token, CancellationToken.None);
+
+        // Assert
+        (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+    }
+
+    [Fact]
+    public async Task UpdateIssueCommentAsync_GivenACommentId_Should_PatchItsBody()
+    {
+        // Arrange
+        string? capturedBody = null;
+        var handler = new TestHttpMessageHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return JsonResponse("{\"id\": 99}");
+        });
+        var sut = BuildReviewSut(handler);
+
+        // Act
+        await sut.UpdateIssueCommentAsync("my-org", "my-service", 99, "the new review", Token, CancellationToken.None);
+
+        // Assert
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Patch);
+        handler.LastRequest.RequestUri!.PathAndQuery.Should().Be("/repos/my-org/my-service/issues/comments/99");
+        handler.LastRequest.Headers.Authorization!.Parameter.Should().Be(Token);
+        JsonDocument.Parse(capturedBody!).RootElement.GetProperty("body").GetString().Should().Be("the new review");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task UpdateIssueCommentAsync_GivenGitHubRefuses_Should_ThrowGitHubApiException(HttpStatusCode status)
+    {
+        // Arrange
+        var sut = BuildReviewSut(new TestHttpMessageHandler("{}", status));
+
+        // Act
+        var act = () => sut.UpdateIssueCommentAsync("o", "r", 99, "x", Token, CancellationToken.None);
+
+        // Assert
+        (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(status);
+    }
+
+    // ── CreateCheckRunAsync ──────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(CheckRunConclusion.Success, "success")]
+    [InlineData(CheckRunConclusion.Neutral, "neutral")]
+    [InlineData(CheckRunConclusion.Failure, "failure")]
+    public async Task CreateCheckRunAsync_GivenAConclusion_Should_PostACompletedCheckRunNamedMoneyMeAiReview(CheckRunConclusion conclusion, string expectedConclusion)
+    {
+        // Arrange
+        const string headSha = "0123456789abcdef0123456789abcdef01234567";
+        string? capturedBody = null;
+        var handler = new TestHttpMessageHandler(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return JsonResponse("{\"id\": 7001}", HttpStatusCode.Created);
+        });
+        var sut = BuildReviewSut(handler);
+        var checkRun = new CheckRunRequest(headSha, conclusion, "Ready to merge", "All eight checks passed.", "review-key");
+
+        // Act
+        var id = await sut.CreateCheckRunAsync("my-org", "my-service", checkRun, Token, CancellationToken.None);
+
+        // Assert
+        id.Should().Be(7001);
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.PathAndQuery.Should().Be("/repos/my-org/my-service/check-runs");
+        var body = JsonDocument.Parse(capturedBody!).RootElement;
+        body.GetProperty("name").GetString().Should().Be("MoneyMe AI review");
+        body.GetProperty("head_sha").GetString().Should().Be(headSha);
+        body.GetProperty("status").GetString().Should().Be("completed");
+        body.GetProperty("conclusion").GetString().Should().Be(expectedConclusion);
+        body.GetProperty("external_id").GetString().Should().Be("review-key");
+        body.GetProperty("output").GetProperty("title").GetString().Should().Be("Ready to merge");
+        body.GetProperty("output").GetProperty("summary").GetString().Should().Be("All eight checks passed.");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task CreateCheckRunAsync_GivenGitHubRefuses_Should_ThrowGitHubApiException(HttpStatusCode status)
+    {
+        // Arrange
+        var sut = BuildReviewSut(new TestHttpMessageHandler("{\"message\":\"Resource not accessible by integration\"}", status));
+        var checkRun = new CheckRunRequest("sha", CheckRunConclusion.Success, "title", "summary", "key");
+
+        // Act
+        var act = () => sut.CreateCheckRunAsync("o", "r", checkRun, Token, CancellationToken.None);
+
+        // Assert
+        (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(status);
     }
 
     // ── GetRepositoryGuidelinesAsync ─────────────────────────────────────────
