@@ -37,6 +37,18 @@ public sealed class ReviewOptions
     /// <summary>A pull request description longer than this many characters is cut, and the prompt says it was.</summary>
     public int MaxDescriptionChars { get; init; } = 10_000;
 
+    /// <summary>
+    /// A review runs on Opus only when the change is over this many lines, additions plus deletions, and it touches a high-risk area (design 5.4).
+    /// A change of exactly this many lines is not over it.
+    /// </summary>
+    public int OpusLineThreshold { get; init; } = 40;
+
+    /// <summary>
+    /// Repositories, each written <c>owner/repo</c> and compared without regard to letter case, that always count as a high-risk area, whatever
+    /// their name or files say. For a repository whose name does not say what it holds.
+    /// </summary>
+    public string[] HighRiskRepositories { get; init; } = [];
+
     /// <summary>Most files reviewed for one pull request.</summary>
     public int MaxFiles { get; init; } = 150;
 

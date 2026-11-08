@@ -25,6 +25,8 @@ public class ReviewOptionsTests
         options.MaxDiffBytes.Should().Be(180_000);
         options.MaxListedFiles.Should().Be(1_000);
         options.MaxDescriptionChars.Should().Be(10_000);
+        options.OpusLineThreshold.Should().Be(40);
+        options.HighRiskRepositories.Should().BeEmpty();
     }
 
     [Fact]

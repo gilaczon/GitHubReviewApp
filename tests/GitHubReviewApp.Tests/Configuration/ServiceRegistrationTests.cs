@@ -239,6 +239,20 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
+    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_SeedTheModelChoiceSettings()
+    {
+        // Arrange
+        using var provider = BuildProvider();
+
+        // Act
+        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
+
+        // Assert — the repository holds the bank-login and Stripe card flows but its name says neither, so only this list sends it to Opus
+        options.OpusLineThreshold.Should().Be(40);
+        options.HighRiskRepositories.Should().Equal("MoneyMeTeam/Moneyme.Global.Library.VueApp");
+    }
+
+    [Fact]
     public void AddReviewPipeline_GivenConfiguredGuidelinePaths_Should_UseExactlyThoseInsteadOfTheDefaultsPlusThem()
     {
         // Arrange — the binder adds configured elements to an array that already has a default, which would keep the defaults in front of an operator's own file

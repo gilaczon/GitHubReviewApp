@@ -56,6 +56,7 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         RequireAtLeast(failures, "MaxDiffBytes", options.MaxDiffBytes, 1);
         RequireAtLeast(failures, "MaxListedFiles", options.MaxListedFiles, 1);
         RequireAtLeast(failures, "MaxDescriptionChars", options.MaxDescriptionChars, 1);
+        RequireAtLeast(failures, "OpusLineThreshold", options.OpusLineThreshold, 0);
 
         if (options.MaxFileBytes > options.MaxDiffBytes)
         {
@@ -79,6 +80,16 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
                 failures.Add(
                     $"Review:AllowedAuthorAssociations has '{association}', which is not an author association GitHub uses " +
                     $"({string.Join(", ", ReviewOptions.KnownAuthorAssociations)}). No pull request would ever match it.");
+            }
+        }
+
+        foreach (var repository in options.HighRiskRepositories)
+        {
+            if (!IsOwnerAndRepository(repository))
+            {
+                failures.Add(
+                    $"Review:HighRiskRepositories has '{repository}', which is not written owner/repo, with no spaces. " +
+                    "It would match no repository, and one that needs the stronger model would be reviewed by the other.");
             }
         }
 
@@ -129,6 +140,18 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         {
             failures.Add($"Review:{setting} must be at most {maximum}, but it is {value}.");
         }
+    }
+
+    private static bool IsOwnerAndRepository(string? entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry) || entry.Any(char.IsWhiteSpace))
+        {
+            return false;
+        }
+
+        var parts = entry.Split('/');
+
+        return parts.Length == 2 && parts.All(part => part.Length > 0);
     }
 
     private static bool IsRepositoryRelativePath(string? path)

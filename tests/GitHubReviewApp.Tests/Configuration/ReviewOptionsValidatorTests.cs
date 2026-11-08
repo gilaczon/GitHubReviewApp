@@ -35,6 +35,19 @@ public class ReviewOptionsValidatorTests
 
         yield return [new ReviewOptions { MaxListedFiles = 0 }, "Review:MaxListedFiles"];
         yield return [new ReviewOptions { MaxDescriptionChars = 0 }, "Review:MaxDescriptionChars"];
+
+        yield return [new ReviewOptions { OpusLineThreshold = -1 }, "Review:OpusLineThreshold"];
+
+        // Never matched: an entry is an owner and a repository, so a blank or half-written one would leave a risky repository on Sonnet
+        yield return [new ReviewOptions { HighRiskRepositories = [""] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["  "] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam/"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["/Moneyme.Global.Library.VueApp"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam/Moneyme/Extra"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = [" MoneyMeTeam/Moneyme.Global.Library.VueApp"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam /Moneyme.Global.Library.VueApp"] }, "Review:HighRiskRepositories"];
+        yield return [new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam/Moneyme.Global.Library.VueApp\t"] }, "Review:HighRiskRepositories"];
     }
 
     [Fact]
@@ -58,6 +71,36 @@ public class ReviewOptionsValidatorTests
 
         // Assert
         result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_GivenAZeroThresholdAndWellFormedHighRiskRepositories_Should_Succeed()
+    {
+        // Arrange — a threshold of zero sends every change that touches a risky area to Opus
+        var options = new ReviewOptions
+        {
+            OpusLineThreshold = 0,
+            HighRiskRepositories = ["MoneyMeTeam/Moneyme.Global.Library.VueApp", "my-org/my-service"]
+        };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert
+        result.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_GivenAMalformedHighRiskRepository_Should_FailNamingTheEntry()
+    {
+        // Arrange
+        var options = new ReviewOptions { HighRiskRepositories = ["MoneyMeTeam/Moneyme.Global.Library.VueApp", "NoSlashHere"] };
+
+        // Act
+        var result = _sut.Validate(Options.DefaultName, options);
+
+        // Assert
+        result.Failures.Should().ContainSingle().Which.Should().Contain("'NoSlashHere'", "the message names the entry that is wrong");
     }
 
     [Fact]
