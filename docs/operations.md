@@ -82,7 +82,17 @@ says; that default belongs to the storage service.
 The `Review:*` and `Claude:*` settings are checked when the host starts. A value that is invalid or out of range, and a key that the settings
 class does not have (a misspelt name, which the configuration binder would otherwise skip without a word), stops the worker from starting,
 and the startup log names the setting. A key that is missing altogether takes its default. Failing at once and visibly is deliberate: a wrong
-value should not wait for some later review to show itself. The shipped `appsettings.json` sets these:
+value should not wait for some later review to show itself.
+
+The checklist review removed settings that earlier versions read, and to the strict binder they are now unknown keys: `Claude:Model` and
+`Review:MaxChunkBytes`, `Review:MaxTotalBytes`, `Review:MaxFiles`, `Review:MaxParallelChunks`, `Review:MaxInlineComments`, `Review:MaxFindings`,
+`Review:LargePullRequestFileThreshold`, `Review:LargePullRequestLineThreshold`, `Review:GuidelinePaths` and `Review:MaxGuidelinesChars`. Any of
+them left behind as a Function App application setting (`Claude__Model`, `Review__MaxFiles`, ...) or as a Key Vault secret named `Claude--Model`,
+`Review--MaxFiles` and so on stops the worker at its first start after the deploy, and the startup log names the key. Delete them from the
+function app's configuration and from the vault before or with the deploy. An application setting for a key the file still sets (for example the
+old `Review__MaxConcurrentModelRequests=6`) is ignored, not refused: the file wins (see below).
+
+The settings, each with the value the shipped `appsettings.json` gives it (or not set):
 
 | Setting | Shipped | Meaning |
 |---|---|---|
@@ -122,7 +132,10 @@ so that a bad value can never stop the app from starting:
 These can be changed while the app runs through Azure App Configuration (section 10). Each value is checked on its own whenever it is read: a
 model id has to look like `claude-` followed by lowercase letters, digits, dots and hyphens (at most 100 characters), and the switch has to be
 `true` or `false`. A value that is missing takes its default. A value that is invalid keeps the last good value of that key and logs a warning
-that names the key, never the value, so a bad model id never keeps the switch from turning reviews off.
+that names the key, never the value, so a bad model id never keeps the switch from turning reviews off. The runtime settings are read once at
+start as well, so an invalid shipped value warns in the startup log. An application setting cannot change these three values: `appsettings.json`
+is read after the application settings and wins (`Runtime__IsReviewEnabled=false` on the function app does nothing). Without App Configuration,
+stop reviews by stopping the function app or by deploying a changed `appsettings.json`.
 
 The secrets are loaded into the same configuration, and the Key Vault provider reads a double hyphen in a secret's name as a colon. A secret
 named `Claude--Something`, `Review--Something` or `Runtime--Something` would therefore be read as a setting under one of those sections
@@ -130,15 +143,19 @@ named `Claude--Something`, `Review--Something` or `Runtime--Something` would the
 vault is shared with other applications, check the name of any new secret in it against every application that reads the vault, not only
 this one, because a secret added for another application can stop this one at its next start.
 
-The secrets are `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret` and, optional, `AppConfigurationConnectionString` (section 10).
-None is checked at startup. The webhook secret is read on every request, so a missing one fails every request. The Anthropic key and the
-GitHub App's private key are read when a review first needs them, so a wrong value shows up on the first review. A connection string for App
-Configuration that cannot be parsed is not used, and a warning at start names the secret.
+The secrets are `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret` and, optional, `AppConfigurationConnectionString` (section 10)
+and `UptraceDsn` (section 6; without it the app exports no traces, metrics or logs, and says so at start with a warning outside Development and
+an Information line in it). None is checked at startup, except that an App Configuration connection string that is set but cannot be parsed is
+reported at start (a warning naming the secret) and not used. The webhook secret is read on every request, so a missing one fails every request.
+The Anthropic key and the GitHub App's private key are read when a review first needs them, so a wrong value shows up on the first review. The
+Uptrace DSN is a credential like the others (it is sent as the `uptrace-dsn` header of every export): never write it to a log or a ticket.
 
 After every deployment or settings change, check that the app started. A POST to `https://<function app host>/api/webhook/github` with no
 signature should answer `401 Invalid signature.`: the signature is checked before anything else, so an unsigned request is refused. That
 answer shows the worker is running with valid settings and can read the webhook secret. A 5xx, a 404 or no answer means the worker did not
-start or the secret is missing: read the function app's startup log. It does not show that the secret matches GitHub's. For that, open the
+start or the secret is missing: read the function app's startup log, and look first for a binder error naming a setting, which after this
+deploy is most likely one of the removed keys listed above left in the application settings or the vault. It does not show that the secret
+matches GitHub's. For that, open the
 GitHub App's settings, **Advanced**, **Recent deliveries** (kept for three days), and redeliver one that is not a `pull_request` delivery,
 such as the `ping` GitHub sent when the webhook was created. The answer to expect is `200 Ignored: not a pull_request event.`. Do not
 redeliver a `pull_request` delivery: it queues a real review.
@@ -146,7 +163,9 @@ redeliver a `pull_request` delivery: it queues a real review.
 After the first deployment of the checklist review, also do these:
 
 1. Open a pull request on a test repository and let the first real review run. Look at the comment and at the check run on GitHub, because
-   only GitHub shows how they render (the tables, the layout, the collapsed parts, the check run's title and summary). The tests cannot see that.
+   only GitHub shows how they render: the headline, the summary, the eight icon lines (the warning sign should show in its emoji form), the
+   counts line, the findings list with its inline code paths, the coverage line, the footer, and the check run's title and summary. The tests
+   cannot see that.
 2. Run the live smoke test once, with a key, before relying on the answer schema. It calls the real API and costs a few cents, so it is
    skipped unless both `LIVE_MODEL_TESTS=1` and `ANTHROPIC_API_KEY` are set in the environment of the machine running the tests.
 3. Ask the owner of the GitHub App to add the Checks permission (section 8). It can be done after the deployment: until it is added and each
@@ -179,15 +198,15 @@ All names start with `github_review_app.` except the token counters.
 | Signal | What it tells you | Act when |
 |---|---|---|
 | `reviews.failed` by `kind` | `transient` is retried; `permanent` was given up on; `ai_spend_limit` means the provider's monthly cap is reached and nothing is retried until it is raised or the month ends; `exhausted` means the retries ran out, and is counted for each delivery of the poison message (up to three when the notice cannot be posted). | `permanent`, `ai_spend_limit` or `exhausted` appear at all. |
-| `reviews.processed` by `result`, `runs` and `coverage` | Reviews whose result was published. `result` is `pass`, `pass_with_comments`, `fail` or `review_failed`; `runs` is the number of model runs that gave an answer (1 or 2, and 0 for `review_failed`); `coverage` is `full`, `partial` (something readable was not read) or `none` (no diff was sent). A `review_failed` result is counted here, with `runs` = 0 and `coverage` = `none`, and not in `reviews.failed`: the app did what it was built to do and told the author. | `review_failed` appears at all: neither run gave an answer, for a reason a retry would not change (declined by the safety checks, out of output space, unreadable, or refused by the AI service). Look at `review.runs` for which. A `fail` result is a normal verdict, not a fault. By itself `none` is normal for a pull request whose changed files are all lockfiles, binaries, minified files or files GitHub sent no patch for: the model still runs twice, on the file list and the description, so `runs` = 2 and a cost are normal with it, and the comment says nothing was reviewed in full. Generated files are read last, not skipped, so they do not give `none`. |
+| `reviews.processed` by `result`, `runs` and `coverage` | Reviews whose result was published. `result` is `pass`, `pass_with_comments`, `fail` or `review_failed`; `runs` is the number of model runs that gave an answer (1 or 2, and 0 for `review_failed`); `coverage` is `full`, `partial` (something readable was not read) or `none` (no diff was sent). A `review_failed` result is counted here, with `runs` = 0 and `coverage` = `none`, and not in `reviews.failed`: the app did what it was built to do and told the author. | `review_failed` appears at all: neither run gave an answer, for a reason a retry would not change (declined by the safety checks, out of output space, unreadable, or refused by the AI service). Look at `review.runs` for which. A `fail` result is a normal verdict, not a fault. By itself `none` is normal for a pull request whose changed files are all lockfiles, binaries, minified files or files GitHub sent no patch for, or whose only files were left out for a line too long to show: the model still runs twice, on the file list and the description, so `runs` = 2 and a cost are normal with it, and the comment says nothing was reviewed in full. Generated files are read last, not skipped, so they do not give `none`. |
 | `reviews.partial` | Reviews that were posted with a file cut, over the diff budget or without a diff. A file GitHub did not list at all (a pull request of more than 3,000 files) is not counted here, though the comment says it was not reviewed. | It becomes common: raise `Review:MaxDiffBytes` only with the model's context in view. |
-| `review.runs` by `outcome` and `model` | How each model run ended: `Completed`, `OutputTruncated`, `Refused`, `InvalidOutput` or `Rejected`, and the model that answered (the one asked for when none did). A run that fails outright is thrown and retried, not counted here. | Anything but `Completed` becomes common, or a `model` appears that is not one of the two you set (the provider fell back). |
+| `review.runs` by `outcome` and `model` | How each model run ended: `Completed`, `OutputTruncated`, `Refused`, `InvalidOutput` or `Rejected`, and the model that answered (the one asked for when none did). A run that fails outright is thrown: retried when the failure is transient, otherwise the author is told at once; either way it is not counted here. | Anything but `Completed` becomes common, or a `model` appears that is not one of the two you set (the provider fell back). |
 | `review.disagreements` by `kind` | Published reviews whose two runs did not agree: `checks` (a check was rated differently, or by one run only) or `verdict` (the runs' own verdicts differ; such a review counts under both). | The share of reviews that disagree climbs. The comment shows the stricter rating of each check, so disagreement costs nothing in safety but says the prompt or the model is unsteady. |
 | `review.check_status` by `check` and `status` | The eight checks of every review that had a verdict, after merging. `check` is `standards-design`, `functionality`, `performance`, `security`, `testing`, `error-handling`, `scalability` or `dependencies`; `status` is `pass`, `concern`, `fail` or `na`. | One check is a `concern` or `fail` in nearly every review, or none ever is. |
 | `review.serious` | Concerns flagged serious in published reviews, after merging. A serious flag is named in the headline ("PASS WITH COMMENTS (1 serious)") and never changes the verdict: only a failed Security check gives FAIL. | It jumps without a change in traffic. |
 | `review.model_choice` by `tier` and `reason` | The model chosen for each published review, "Review failed" included: `tier` is `sonnet` or `opus`, `reason` is `high_risk`, `low_risk` or `small_change`. | The share of `opus` rises: it is the dearer model. |
 | `review.cost` by `tier` | What one published review cost in US dollars, both runs together. A review where either run threw is not recorded (the cost of a run that failed outright is unknown), nor one whose model is missing from `Claude:Pricing`, which also logs a warning. | The cost of a review or the daily total moves without a matching change in traffic. |
-| `reviews.skipped` by `reason` | A queued review that was not carried out: `NotOpen`, `Draft`, `Superseded`, `AlreadyReviewed`, `NothingToReview`, `InProgress` or `SwitchedOff`. A review dropped because the commit moved on or because the pull request closed after the model had run is counted here (`Superseded`, `NotOpen`, `Draft`) and not in the metrics above. | `SwitchedOff` appears when you did not switch reviews off. |
+| `reviews.skipped` by `reason` | A queued review that was not carried out: `NotOpen`, `Draft`, `Superseded`, `AlreadyReviewed`, `NothingToReview`, `InProgress` or `SwitchedOff`. A review dropped because the commit moved on or because the pull request closed after the model had run is counted here (`Superseded`, `NotOpen`, `Draft`) and not in the per-review metrics (`review.runs` and the token counters still count the runs that ran). | `SwitchedOff` appears when you did not switch reviews off. |
 | `review.duration` by `outcome` | End-to-end time of an attempt. `outcome` is `posted`, `review_failed`, `skipped`, `retry`, `failed` or `interrupted`. | The 95th percentile nears 1,200,000 ms, the app's own limit. |
 | `failure_notices.failed` by `outcome` | An attempt to tell an author that a review failed which itself failed: `refused` (GitHub will not accept it; the author is untold) or `retry` (it will be tried again, so one author can count more than once). | It keeps rising: authors are going untold. See `ai-review-queue-poison-poison` in section 3. |
 | `reviews.interrupted` | Attempts cut short by a host shutdown, which return to the queue. | It rises with no deployment going on. |
@@ -227,7 +246,8 @@ after the deployment, and until each installation owner has approved it, reviews
 approved, the app uses it from the next token it fetches (a token is cached until shortly before it expires, so allow up to an hour).
 
 The webhook needs the **Pull request** event, as before. The app answers 202 for a `pull_request` event of the four actions it reviews
-(`opened`, `reopened`, `synchronize`, `ready_for_review`) on a pull request that is not a draft, from an author the allow-list accepts.
+(`opened`, `reopened`, `synchronize`, `ready_for_review`) on a pull request that is not a draft, from an author the allow-list accepts, while
+reviews are switched on (section 4; otherwise `200 Ignored: reviews are switched off.`).
 
 ## 9. The check run
 
@@ -243,7 +263,8 @@ a draft, or moved to a newer commit), so no unfinished run is left behind.
 | Review failed | `neutral` | "Review failed" |
 
 When the review has serious concerns, the title adds their number after the verdict, for example "PASS WITH COMMENTS (1 serious)". FAIL is
-given only when the Security check failed; PASS WITH COMMENTS when any other check is a concern or failed; PASS otherwise.
+given only when the Security check failed; PASS WITH COMMENTS when any check, Security included, is a concern; PASS otherwise. Only Security
+can fail: a fail the model gives another check is read as a concern.
 
 The summary is the comment's text without its hidden marker. The run's `external_id` holds the pull request number.
 
@@ -270,7 +291,8 @@ If you make `MoneyMe AI review` a required check in a ruleset or branch protecti
 
 App Configuration is optional. It lets you switch reviews off and change the two model ids while the app runs, without a deployment. With no
 `AppConfigurationConnectionString` secret, the app does not use it, logs that the values in `appsettings.json` are in use, and those apply
-for the life of the process.
+for the life of the process. A Function App application setting cannot change them either (the file wins, section 4): without the store, the
+ways to stop reviews are stopping the function app or deploying a changed `appsettings.json`.
 
 The app reads the store through its read-only access-key connection string, which is kept in Key Vault as `AppConfigurationConnectionString`
 and loaded like every other secret. The read-write keys stay with the owners of the store's configuration: the app never needs them. Do not
@@ -291,8 +313,8 @@ startup. The key `GitHubReviewApp:Runtime:SonnetModel` is read as the setting `R
 
 To change a value, change the key and then change the sentinel, in that order. The app does not look at the other keys until the sentinel has
 changed. It checks the sentinel when a function starts, at most every 120 seconds in Production and every 30 seconds in other
-environments, so a change reaches an instance on the first invocation after that interval has passed. A review that is running keeps the
-model it started with.
+environments: the first invocation after the interval starts the read, which is not awaited, so the change applies from the next invocation
+after that one. A review that is running keeps the model it started with.
 
 Last-known-good behaviour:
 
@@ -307,4 +329,5 @@ Last-known-good behaviour:
 
 Switching reviews off is the fast way to stop spending: set `GitHubReviewApp:Runtime:IsReviewEnabled` to `false` and change the sentinel.
 Messages already in the queue are skipped, not reviewed, and `reviews.skipped` with `reason` = `SwitchedOff` counts them. A pull request
-skipped this way is reviewed again only when it gets a new commit or is reopened, because the app does not replay the queue.
+skipped this way is reviewed again when it gets a new commit, is reopened, is marked ready for review, or its delivery is redelivered from the
+GitHub App's **Recent deliveries**, because the app does not replay the queue.
