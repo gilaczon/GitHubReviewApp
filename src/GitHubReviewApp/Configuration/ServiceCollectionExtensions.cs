@@ -56,6 +56,7 @@ internal static class ServiceCollectionExtensions
         // Transient, because they depend on typed HTTP clients: a singleton would pin one client (and its
         // connection pool) for the life of the process and never notice DNS changes.
         services.AddTransient<IReviewOrchestrator, ReviewOrchestrator>();
+        services.AddTransient<ReviewPublisher>();
         services.AddTransient<IReviewFailureNotifier, ReviewFailureNotifier>();
 
         return services;

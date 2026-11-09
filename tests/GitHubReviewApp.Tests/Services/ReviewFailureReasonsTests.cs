@@ -6,6 +6,11 @@ public class ReviewFailureReasonsTests
     {
         yield return [ReviewFailureReasons.PermanentError];
         yield return [ReviewFailureReasons.RetriesExhausted];
+        yield return [ReviewFailureReasons.AllRefused];
+        yield return [ReviewFailureReasons.AllTruncated];
+        yield return [ReviewFailureReasons.AllInvalid];
+        yield return [ReviewFailureReasons.AllRejected];
+        yield return [ReviewFailureReasons.NoneFinished];
     }
 
     [Theory]
@@ -60,6 +65,30 @@ public class ReviewFailureReasonsTests
         // so a notice that names an outage would sometimes be wrong
         notice.Should().Contain("after several attempts");
         causes.Where(cause => notice.Contains(cause, StringComparison.OrdinalIgnoreCase)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ModelLevelReasons_GivenEachWayBothReviewsCanEnd_Should_SayWhatHappenedInTheDesignsWords()
+    {
+        // Arrange
+
+        // Act
+        var reasons = new[]
+        {
+            ReviewFailureReasons.AllRefused,
+            ReviewFailureReasons.AllTruncated,
+            ReviewFailureReasons.AllInvalid,
+            ReviewFailureReasons.AllRejected,
+            ReviewFailureReasons.NoneFinished
+        };
+
+        // Assert
+        reasons.Should().Equal(
+            "Both reviews were declined by the AI service's safety checks.",
+            "Both reviews ran out of output space before finishing.",
+            "Neither review returned a readable answer.",
+            "The AI service refused the review request.",
+            "Neither review finished.");
     }
 
     [Fact]

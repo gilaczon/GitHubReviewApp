@@ -158,6 +158,7 @@ public class ServiceRegistrationTests
     [Theory]
     [InlineData(typeof(IReviewOrchestrator))]
     [InlineData(typeof(IReviewFailureNotifier))]
+    [InlineData(typeof(ReviewPublisher))]
     public void AddReviewPipeline_GivenTheServicesThatDependOnTypedHttpClients_Should_RegisterEachAsTransient(Type serviceType)
     {
         // Arrange — a singleton would pin one client, and its connection pool, for the life of the process, and never notice a DNS change

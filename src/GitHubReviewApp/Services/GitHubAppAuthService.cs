@@ -41,7 +41,7 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         _logger = logger;
     }
 
-    private record CachedToken(string Token, DateTimeOffset ExpiresAt, bool HasContentsAccess)
+    private record CachedToken(string Token, DateTimeOffset ExpiresAt, bool HasContentsAccess, bool HasChecksAccess)
     {
         public bool IsValidAt(DateTimeOffset now) => now < ExpiresAt;
     }
@@ -93,6 +93,14 @@ public class GitHubAppAuthService : IGitHubAppAuthService
 
         // With no token cached there is nothing to say the permission is missing.
         return !_tokenCache.TryGetValue((installationId, repository.ToLowerInvariant()), out var cached) || cached.HasContentsAccess;
+    }
+
+    public bool CanWriteChecks(long installationId, string repository)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+
+        // With no token cached there is nothing to say the permission is missing.
+        return !_tokenCache.TryGetValue((installationId, repository.ToLowerInvariant()), out var cached) || cached.HasChecksAccess;
     }
 
     public void ForgetInstallationToken(long installationId, string repository)
@@ -184,11 +192,12 @@ public class GitHubAppAuthService : IGitHubAppAuthService
             "Exchanging JWT for an access token for installation {InstallationId}, repository {Repository}.",
             installationId, repository);
 
-        var response = await SendTokenRequestAsync(installationId, repository, jwt, hasContentsPermission: true, cancellationToken);
-        var hasContentsAccess = true;
+        var response = await SendTokenRequestAsync(installationId, repository, jwt, hasEveryPermission: true, cancellationToken);
+        var hasAllAccess = true;
 
         // GitHub answers 422 when a requested permission was never granted to the installation, and also when the repository is not available
-        // to it. Only the first is worth retrying without contents access: the review itself needs pull request access only.
+        // to it. Only the first is worth retrying with pull request access alone: the comment needs nothing more. Contents and checks are
+        // both left out, so the token says it cannot read guidelines and cannot write a check run.
         if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
         {
             var rejection = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -204,12 +213,12 @@ public class GitHubAppAuthService : IGitHubAppAuthService
             response.Dispose();
 
             _logger.LogWarning(
-                "Installation {InstallationId} has not been granted the contents permission ({Reason}). " +
-                "Requesting a token without it; repository review guidelines will not be read.",
+                "Installation {InstallationId} has not been granted every permission requested ({Reason}). " +
+                "Requesting a token with pull request access only; repository review guidelines will not be read and no check run will be created.",
                 installationId, rejection.ReplaceLineEndings(" ").Trim());
 
-            response = await SendTokenRequestAsync(installationId, repository, jwt, hasContentsPermission: false, cancellationToken);
-            hasContentsAccess = false;
+            response = await SendTokenRequestAsync(installationId, repository, jwt, hasEveryPermission: false, cancellationToken);
+            hasAllAccess = false;
         }
 
         using (response)
@@ -222,7 +231,7 @@ public class GitHubAppAuthService : IGitHubAppAuthService
             var body = await response.Content.ReadFromJsonAsync<InstallationTokenResponse>(cancellationToken)
                 ?? throw new InvalidOperationException("Empty installation token response.");
 
-            return new CachedToken(body.Token, body.ExpiresAt - _tokenRefreshMargin, hasContentsAccess);
+            return new CachedToken(body.Token, body.ExpiresAt - _tokenRefreshMargin, hasAllAccess, hasAllAccess);
         }
     }
 
@@ -230,14 +239,15 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         long installationId,
         string repository,
         string jwt,
-        bool hasContentsPermission,
+        bool hasEveryPermission,
         CancellationToken cancellationToken)
     {
         var permissions = new Dictionary<string, string> { ["pull_requests"] = "write" };
 
-        if (hasContentsPermission)
+        if (hasEveryPermission)
         {
             permissions["contents"] = "read";
+            permissions["checks"] = "write";
         }
 
         var requestBody = JsonSerializer.Serialize(new { repositories = new[] { repository }, permissions });

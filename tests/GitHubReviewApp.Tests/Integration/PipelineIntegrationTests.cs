@@ -292,8 +292,30 @@ public class PipelineIntegrationTests
         await act.Should().NotThrowAsync("retrying a rejected request cannot help");
         backend.PostedReviews.Should().BeEmpty();
         var notice = backend.PostedComments.Should().ContainSingle().Subject.BodyJson().GetProperty("body").GetString()!;
-        notice.Should().Contain("AI code review did not complete").And.Contain("`0123456`");
+        notice.Should().StartWith("Review failed - no verdict").And.Contain("0123456789");
         notice.Should().NotContain("Bad parameter", "provider error text stays in the logs");
+        var checkRun = backend.CheckRuns.Should().ContainSingle().Subject.BodyJson();
+        checkRun.GetProperty("conclusion").GetString().Should().Be("neutral");
+        checkRun.GetProperty("output").GetProperty("title").GetString().Should().Be("Review failed");
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenTheAppHasNoChecksPermission_Should_StillTellTheAuthorWithTheCommentAlone()
+    {
+        // Arrange
+        var backend = new FakeBackend
+        {
+            IsChecksPermissionGranted = false,
+            AnthropicHandler = _ => AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "Bad parameter.")
+        };
+        using var provider = BuildProvider(backend);
+
+        // Act
+        await RunProcessorAsync(provider);
+
+        // Assert
+        backend.PostedComments.Should().ContainSingle();
+        backend.CheckRuns.Should().BeEmpty("a token without the Checks permission cannot create a check run");
     }
 
     [Fact]

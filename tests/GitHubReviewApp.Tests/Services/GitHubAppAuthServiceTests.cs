@@ -88,7 +88,7 @@ public class GitHubAppAuthServiceTests
     // ── Scoping ──────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetInstallationTokenAsync_GivenNoCache_Should_RequestATokenLimitedToTheRepositoryWithMinimalPermissions()
+    public async Task GetInstallationTokenAsync_GivenEveryPermissionGranted_Should_RequestPullRequestsContentsAndChecks()
     {
         // Arrange
         string? capturedBody = null;
@@ -108,11 +108,12 @@ public class GitHubAppAuthServiceTests
         var permissions = body.GetProperty("permissions");
         permissions.GetProperty("pull_requests").GetString().Should().Be("write");
         permissions.GetProperty("contents").GetString().Should().Be("read");
-        permissions.EnumerateObject().Should().HaveCount(2, "nothing beyond what the review needs may be requested");
+        permissions.GetProperty("checks").GetString().Should().Be("write");
+        permissions.EnumerateObject().Should().HaveCount(3, "nothing beyond what the review needs may be requested");
     }
 
     [Fact]
-    public async Task GetInstallationTokenAsync_GivenTheInstallationLacksContentsAccess_Should_RetryWithPullRequestPermissionOnly()
+    public async Task GetInstallationTokenAsync_GivenUngrantedPermissions_Should_RetryWithPullRequestsOnlyAndReportNoChecks()
     {
         // Arrange — GitHub answers 422 when a requested permission was never granted to the installation
         var bodies = new List<string>();
@@ -121,12 +122,12 @@ public class GitHubAppAuthServiceTests
             var body = await req.Content!.ReadAsStringAsync();
             bodies.Add(body);
 
-            return body.Contains("\"contents\"", StringComparison.Ordinal)
+            return body.Contains("\"checks\"", StringComparison.Ordinal)
                 ? new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
                 {
                     Content = new StringContent("{\"message\":\"The permissions requested are not granted to this installation.\"}")
                 }
-                : BuildInstallationTokenResponse("ghs_without_contents", InAnHour);
+                : BuildInstallationTokenResponse("ghs_pull_requests_only", InAnHour);
         });
         var sut = BuildSut(handler);
 
@@ -134,11 +135,13 @@ public class GitHubAppAuthServiceTests
         var token = await sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
 
         // Assert
-        token.Should().Be("ghs_without_contents");
+        token.Should().Be("ghs_pull_requests_only");
         bodies.Should().HaveCount(2);
         var retryPermissions = JsonDocument.Parse(bodies[1]).RootElement.GetProperty("permissions");
         retryPermissions.GetProperty("pull_requests").GetString().Should().Be("write");
-        retryPermissions.TryGetProperty("contents", out _).Should().BeFalse();
+        retryPermissions.EnumerateObject().Should().ContainSingle("the retry asks for pull requests alone");
+        sut.CanWriteChecks(TestInstallationId, TestRepository).Should().BeFalse();
+        sut.CanReadContents(TestInstallationId, TestRepository).Should().BeFalse();
     }
 
     [Fact]
@@ -224,6 +227,58 @@ public class GitHubAppAuthServiceTests
 
         // Act
         var result = sut.CanReadContents(TestInstallationId, TestRepository);
+
+        // Assert
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CanWriteChecks_GivenATokenIssuedWithChecks_Should_BeTrue()
+    {
+        // Arrange
+        var sut = BuildSut(new TestHttpMessageHandler(req => BuildInstallationTokenResponse("ghs_full", InAnHour)));
+        await sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
+
+        // Act
+        var result = sut.CanWriteChecks(TestInstallationId, TestRepository);
+
+        // Assert
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CanWriteChecks_GivenATokenIssuedWithoutChecks_Should_BeFalse()
+    {
+        // Arrange
+        var handler = new TestHttpMessageHandler(async req =>
+        {
+            var body = await req.Content!.ReadAsStringAsync();
+
+            return body.Contains("\"checks\"", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+                {
+                    Content = new StringContent("{\"message\":\"The permissions requested are not granted to this installation.\"}")
+                }
+                : BuildInstallationTokenResponse("ghs_without_checks", InAnHour);
+        });
+        var sut = BuildSut(handler);
+        await sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
+
+        // Act
+        var result = sut.CanWriteChecks(TestInstallationId, TestRepository);
+
+        // Assert
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public void CanWriteChecks_GivenNoTokenWasFetchedYet_Should_BeTrueBecauseNothingSaysOtherwise()
+    {
+        // Arrange
+        var sut = BuildSut(new TestHttpMessageHandler("{}"));
+
+        // Act
+        var result = sut.CanWriteChecks(TestInstallationId, TestRepository);
 
         // Assert
         result.Should().BeTrue();

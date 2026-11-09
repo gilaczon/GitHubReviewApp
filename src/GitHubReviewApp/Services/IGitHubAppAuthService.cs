@@ -15,6 +15,12 @@ public interface IGitHubAppAuthService
     bool CanReadContents(long installationId, string repository);
 
     /// <summary>
+    /// False when the token cached for this repository was issued without the checks permission, because the installation was never granted it.
+    /// A check run is then not attempted: GitHub would refuse it, and the comment alone still carries the result. True when no token is cached.
+    /// </summary>
+    bool CanWriteChecks(long installationId, string repository);
+
+    /// <summary>
     /// Drops the cached token for this repository. GitHub answers 401 to a token it no longer accepts (revoked, or expired early), and the cached
     /// copy would be handed out again until its own expiry time, failing every review of the repository the same way.
     /// </summary>

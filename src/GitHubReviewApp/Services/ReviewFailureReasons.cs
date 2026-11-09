@@ -17,4 +17,16 @@ public static class ReviewFailureReasons
         "The automated review could not be completed after several attempts. " +
         "This is usually temporary, so pushing a new commit will start a new review. " +
         "If it keeps happening, please tell whoever runs this review app.";
+
+    // What a review says when both model runs ended without an answer (design 5.12). The first four name what both runs ended with; the last
+    // covers runs that ended differently.
+    public const string AllRefused = "Both reviews were declined by the AI service's safety checks.";
+
+    public const string AllTruncated = "Both reviews ran out of output space before finishing.";
+
+    public const string AllInvalid = "Neither review returned a readable answer.";
+
+    public const string AllRejected = "The AI service refused the review request.";
+
+    public const string NoneFinished = "Neither review finished.";
 }

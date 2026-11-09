@@ -6,163 +6,210 @@ public class ReviewFailureNotifierTests
     private const string HeadSha = "0123456789abcdef0123456789abcdef01234567";
     private const string EarlierSha = "1111111111111111111111111111111111111111";
     private const string AppLogin = "my-reviewer[bot]";
+    private const string Reason = "The AI service could not be reached.";
 
     private static readonly ReviewQueueMessage _message = new("my-org", "my-service", 7, "title", "basesha", HeadSha, 12345L);
 
-    private static (ReviewFailureNotifier Sut, Mock<IGitHubService> GitHub) Build(
+    private static (ReviewFailureNotifier Sut, Mock<IGitHubService> GitHub, Mock<IGitHubAppAuthService> Auth) Build(
         PullRequestInfo? pullRequest = null,
-        IReadOnlyList<PullRequestReviewSummary>? reviews = null)
+        IReadOnlyList<IssueComment>? comments = null,
+        bool canWriteChecks = true)
     {
         var auth = new Mock<IGitHubAppAuthService>();
         auth.Setup(a => a.GetInstallationTokenAsync(12345L, "my-service", It.IsAny<CancellationToken>())).ReturnsAsync(Token);
         auth.Setup(a => a.GetAppLoginAsync(It.IsAny<CancellationToken>())).ReturnsAsync(AppLogin);
+        auth.Setup(a => a.CanWriteChecks(12345L, "my-service")).Returns(canWriteChecks);
 
         var github = new Mock<IGitHubService>();
         github.Setup(g => g.GetPullRequestAsync("my-org", "my-service", 7, Token, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(pullRequest ?? new PullRequestInfo("open", false, "title", HeadSha, "basesha", 1, 1, 1));
-        github.Setup(g => g.ListReviewsAsync("my-org", "my-service", 7, Token, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(reviews ?? []);
-        github.Setup(g => g.PostCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(pullRequest ?? OpenPullRequest());
+        github.Setup(g => g.ListIssueCommentsAsync("my-org", "my-service", 7, Token, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(comments ?? []);
+        github.Setup(g => g.CreateCheckRunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CheckRunRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(900L);
+        github.Setup(g => g.CreateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(901L);
+        github.Setup(g => g.UpdateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var sut = new ReviewFailureNotifier(auth.Object, github.Object, NullLogger<ReviewFailureNotifier>.Instance);
-        return (sut, github);
+        var publisher = new ReviewPublisher(github.Object, NullLogger<ReviewPublisher>.Instance);
+        var sut = new ReviewFailureNotifier(auth.Object, github.Object, publisher, NullLogger<ReviewFailureNotifier>.Instance);
+
+        return (sut, github, auth);
     }
 
-    private static void VerifyNoComment(Mock<IGitHubService> github)
+    private static PullRequestInfo OpenPullRequest(string state = "open", bool isDraft = false, string headSha = HeadSha)
     {
-        github.Verify(g => g.PostCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never());
+        return new PullRequestInfo(state, isDraft, "title", headSha, "basesha", 3, 40, 10, "description", "dev1", "main", "feature/retries");
     }
 
-    private static void VerifyOneComment(Mock<IGitHubService> github)
+    private static IssueComment Comment(long id, string author, string sha, ReviewRecordOutcome outcome)
     {
-        github.Verify(g => g.PostCommentAsync("my-org", "my-service", 7, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
+        return new IssueComment(id, author, $"text\n\n{ReviewCommentMarker.For(sha, outcome)}");
     }
 
-    private static PullRequestReviewSummary Review(string author, string body, string commitId = HeadSha)
+    private static void VerifyNothingPublished(Mock<IGitHubService> github)
     {
-        return new PullRequestReviewSummary(1, "COMMENTED", body, commitId, author);
+        github.Verify(
+            g => g.CreateCheckRunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CheckRunRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never());
+        github.Verify(
+            g => g.CreateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never());
+        github.Verify(
+            g => g.UpdateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never());
     }
 
     [Fact]
-    public async Task NotifyFailureAsync_GivenAnOpenPullRequestAtTheSameCommit_Should_PostACommentWithTheReasonAndTheShortCommit()
+    public async Task NotifyFailureAsync_GivenAnOpenPullRequest_Should_PublishReviewFailedWithANeutralCheck()
     {
         // Arrange
+        CheckRunRequest? checkRun = null;
         string? posted = null;
-        var (sut, github) = Build();
-        github.Setup(g => g.PostCommentAsync("my-org", "my-service", 7, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()))
+        var (sut, github, _) = Build();
+        github.Setup(g => g.CreateCheckRunAsync("my-org", "my-service", It.IsAny<CheckRunRequest>(), Token, It.IsAny<CancellationToken>()))
+            .Callback<string, string, CheckRunRequest, string, CancellationToken>((_, _, request, _, _) => checkRun = request)
+            .ReturnsAsync(900L);
+        github.Setup(g => g.CreateIssueCommentAsync("my-org", "my-service", 7, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()))
             .Callback<string, string, int, string, string, CancellationToken>((_, _, _, body, _, _) => posted = body)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(901L);
 
         // Act
-        await sut.NotifyFailureAsync(_message, "The AI service was unavailable.", CancellationToken.None);
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
         posted.Should().NotBeNull();
-        posted.Should().Contain("AI code review did not complete").And.Contain("`0123456`").And.Contain("The AI service was unavailable.");
-        posted.Should().Contain("Push a new commit");
+        posted.Should().StartWith("Review failed - no verdict").And.Contain(Reason);
+        ReviewCommentMarker.TryRead(posted, out var markedSha, out var outcome).Should().BeTrue();
+        markedSha.Should().Be(HeadSha);
+        outcome.Should().Be(ReviewRecordOutcome.Failed);
+        checkRun.Should().NotBeNull();
+        checkRun!.HeadSha.Should().Be(HeadSha);
+        checkRun.Conclusion.Should().Be(CheckRunConclusion.Neutral);
+        checkRun.Title.Should().Be("Review failed");
+        checkRun.ExternalId.Should().Be("7");
+        checkRun.Summary.Should().Be(ChecklistCommentFormatter.CheckRunSummary(posted!)).And.Contain(Reason).And.NotContain("<!--");
     }
 
     [Fact]
-    public async Task NotifyFailureAsync_GivenAnOpenPullRequest_Should_NotPostAReviewMarkerSoTheCommentIsNeverTakenForACompletedReview()
+    public async Task NotifyFailureAsync_GivenThePullRequestsDetails_Should_NameThemInTheFooter()
     {
         // Arrange
         string? posted = null;
-        var (sut, github) = Build();
-        github.Setup(g => g.PostCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        var (sut, github, _) = Build();
+        github.Setup(g => g.CreateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Callback<string, string, int, string, string, CancellationToken>((_, _, _, body, _, _) => posted = body)
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(901L);
 
         // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
-        ReviewMarker.IsAtEndOf(posted, HeadSha).Should().BeFalse();
-        posted.Should().NotContain("<!--");
+        posted.Should().Contain("my-org/my-service #7").And.Contain("feature/retries → main · by dev1").And.Contain("3 files +40 -10");
+    }
+
+    [Fact]
+    public async Task NotifyFailureAsync_GivenNoChecksPermission_Should_PostOnlyTheComment()
+    {
+        // Arrange
+        var (sut, github, _) = Build(canWriteChecks: false);
+
+        // Act
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
+
+        // Assert
+        github.Verify(
+            g => g.CreateCheckRunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CheckRunRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never());
+        github.Verify(g => g.CreateIssueCommentAsync("my-org", "my-service", 7, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task NotifyFailureAsync_GivenThisPullRequestWasReviewedAtTheHead_Should_StayQuiet()
+    {
+        // Arrange — e.g. a second queued message for the same commit completed while this one was failing
+        var (sut, github, _) = Build(comments: [Comment(12, AppLogin, HeadSha, ReviewRecordOutcome.Reviewed)]);
+
+        // Act
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
+
+        // Assert
+        VerifyNothingPublished(github);
     }
 
     [Theory]
     [InlineData("closed", false, HeadSha)]
     [InlineData("open", true, HeadSha)]
     [InlineData("open", false, "ffffffffffffffffffffffffffffffffffffffff")]
-    public async Task NotifyFailureAsync_GivenAClosedDraftOrMovedOnPullRequest_Should_StayQuiet(string state, bool isDraft, string headSha)
+    public async Task NotifyFailureAsync_GivenAClosedDraftOrSupersededPullRequest_Should_StayQuiet(string state, bool isDraft, string headSha)
     {
         // Arrange
-        var (sut, github) = Build(new PullRequestInfo(state, isDraft, "title", headSha, "basesha", 1, 1, 1));
+        var (sut, github, _) = Build(OpenPullRequest(state, isDraft, headSha));
 
         // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
-        VerifyNoComment(github);
+        VerifyNothingPublished(github);
     }
 
     [Fact]
-    public async Task NotifyFailureAsync_GivenThisAppsReviewForThisCommitAlreadyExists_Should_StayQuietBecauseTheReviewDidSucceed()
-    {
-        // Arrange — e.g. a second queued message for the same commit completed while this one was failing
-        var existing = Review(AppLogin, "done\n" + ReviewMarker.For(HeadSha));
-        var (sut, github) = Build(reviews: [existing]);
-
-        // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
-
-        // Assert
-        VerifyNoComment(github);
-    }
-
-    [Fact]
-    public async Task NotifyFailureAsync_GivenOnlyAHumanReviewQuotesTheMarker_Should_StillTellTheAuthor()
-    {
-        // Arrange — only this app's own review proves the commit was reviewed; anyone can paste the marker text
-        var quoted = Review("octocat", ReviewMarker.For(HeadSha));
-        var (sut, github) = Build(reviews: [quoted]);
-
-        // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
-
-        // Assert
-        VerifyOneComment(github);
-    }
-
-    [Fact]
-    public async Task NotifyFailureAsync_GivenAnotherBotsReviewEndsWithTheMarker_Should_StillTellTheAuthor()
+    public async Task NotifyFailureAsync_GivenOurEarlierComment_Should_UpdateIt()
     {
         // Arrange
-        var other = Review("other-reviewer[bot]", ReviewMarker.For(HeadSha));
-        var (sut, github) = Build(reviews: [other]);
+        var (sut, github, _) = Build(comments:
+        [
+            Comment(30, AppLogin, EarlierSha, ReviewRecordOutcome.Reviewed),
+            Comment(12, AppLogin, EarlierSha, ReviewRecordOutcome.Failed)
+        ]);
 
         // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
-        VerifyOneComment(github);
+        github.Verify(g => g.UpdateIssueCommentAsync("my-org", "my-service", 12L, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
+        github.Verify(
+            g => g.CreateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never());
     }
 
     [Fact]
-    public async Task NotifyFailureAsync_GivenThisAppsReviewOfAnEarlierCommitQuotingThisCommitsMarker_Should_StillTellTheAuthor()
+    public async Task NotifyFailureAsync_GivenOnlyAHumanCommentQuotesTheReviewedMarker_Should_StillTellTheAuthor()
     {
-        // Arrange — a file name in an earlier review of this app can carry the marker text of a later commit
-        var forged = Review(AppLogin, $"Not reviewed: `x{ReviewMarker.For(HeadSha)}.png`\n\n{ReviewMarker.For(EarlierSha)}", EarlierSha);
-        var (sut, github) = Build(reviews: [forged]);
+        // Arrange — only this app's own comment proves the commit was reviewed; anyone can paste the marker text
+        var (sut, github, _) = Build(comments: [Comment(12, "octocat", HeadSha, ReviewRecordOutcome.Reviewed)]);
 
         // Act
-        await sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
-        VerifyOneComment(github);
+        github.Verify(g => g.CreateIssueCommentAsync("my-org", "my-service", 7, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task NotifyFailureAsync_GivenOurEarlierFailureNoticeForThisCommit_Should_TryToPublishAgain()
+    {
+        // Arrange — a "Review failed" notice never counts as a review, so the next failure replaces it
+        var (sut, github, _) = Build(comments: [Comment(12, AppLogin, HeadSha, ReviewRecordOutcome.Failed)]);
+
+        // Act
+        await sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
+
+        // Assert
+        github.Verify(g => g.UpdateIssueCommentAsync("my-org", "my-service", 12L, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
     }
 
     [Fact]
     public async Task NotifyFailureAsync_GivenGitHubRefusesTheComment_Should_Throw()
     {
         // Arrange
-        var (sut, github) = Build();
-        github.Setup(g => g.PostCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        var (sut, github, _) = Build();
+        github.Setup(g => g.CreateIssueCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new GitHubApiException("forbidden", HttpStatusCode.Forbidden, false));
 
         // Act
-        var act = () => sut.NotifyFailureAsync(_message, "reason", CancellationToken.None);
+        var act = () => sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<GitHubApiException>();
