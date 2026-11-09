@@ -200,6 +200,30 @@ public class ReviewFailureNotifierTests
         github.Verify(g => g.UpdateIssueCommentAsync("my-org", "my-service", 12L, It.IsAny<string>(), Token, It.IsAny<CancellationToken>()), Times.Once());
     }
 
+    [Theory]
+    [InlineData("pull-request", HttpStatusCode.Unauthorized, 1)]
+    [InlineData("comments", HttpStatusCode.Unauthorized, 1)]
+    [InlineData("pull-request", HttpStatusCode.Forbidden, 0)]
+    public async Task NotifyFailureAsync_GivenGitHubAnswers401_Should_ForgetTheTokenBeforeRethrowingSoTheRetryFetchesANewOne(
+        string failingCall, HttpStatusCode status, int expectedForgetCount)
+    {
+        // Arrange — a 401 is retried on the promise that the token is dropped first; without this, the poison handler would retry the notice
+        // with the same rejected token until its attempts ran out. A 403 says nothing against the token, so it is kept.
+        var (sut, github, auth) = Build();
+        var failure = new GitHubApiException("refused", status, false);
+        github.Setup(g => g.GetPullRequestAsync("my-org", "my-service", 7, Token, It.IsAny<CancellationToken>()))
+            .Returns(() => failingCall == "pull-request" ? Task.FromException<PullRequestInfo>(failure) : Task.FromResult(OpenPullRequest()));
+        github.Setup(g => g.ListIssueCommentsAsync("my-org", "my-service", 7, Token, It.IsAny<CancellationToken>()))
+            .Returns(() => failingCall == "comments" ? Task.FromException<IReadOnlyList<IssueComment>>(failure) : Task.FromResult<IReadOnlyList<IssueComment>>([]));
+
+        // Act
+        var act = () => sut.NotifyFailureAsync(_message, Reason, CancellationToken.None);
+
+        // Assert
+        (await act.Should().ThrowAsync<GitHubApiException>()).Which.Should().BeSameAs(failure);
+        auth.Verify(a => a.ForgetInstallationToken(12345L, "my-service"), Times.Exactly(expectedForgetCount));
+    }
+
     [Fact]
     public async Task NotifyFailureAsync_GivenGitHubRefusesTheComment_Should_Throw()
     {

@@ -23,6 +23,22 @@ public sealed class ReviewFailureNotifier : IReviewFailureNotifier
 
     public async Task NotifyFailureAsync(ReviewQueueMessage message, string reason, CancellationToken cancellationToken)
     {
+        try
+        {
+            await PostNoticeAsync(message, reason, cancellationToken);
+        }
+        catch (GitHubApiException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            // GitHub no longer accepts the cached token. FailureClassifier treats a 401 as transient on the promise that the token is dropped
+            // first, which the processor keeps for the review itself; the notice is retried by the processor and by the poison handler, and
+            // both would send the same rejected token again unless it is forgotten here.
+            _auth.ForgetInstallationToken(message.InstallationId, message.Repo);
+            throw;
+        }
+    }
+
+    private async Task PostNoticeAsync(ReviewQueueMessage message, string reason, CancellationToken cancellationToken)
+    {
         var token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
         var pullRequest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
 

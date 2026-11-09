@@ -17,13 +17,19 @@ public class ReviewOrchestratorTests
     // A run that hangs must fail the test, not hang the suite.
     private static readonly TimeSpan _hangGuard = TimeSpan.FromSeconds(20);
 
-    public static IEnumerable<object[]> EndingsOfTheSecondRun()
+    /// <summary>Every way one run can end without an answer while the other completes, with the index of the run that completes: either one.</summary>
+    public static IEnumerable<object[]> EndingsOfTheOtherRun()
     {
-        yield return [ReviewOrchestratorHarness.Ended(RunOutcome.Refused)];
-        yield return [ReviewOrchestratorHarness.Ended(RunOutcome.InvalidOutput)];
-        yield return [ReviewOrchestratorHarness.Ended(RunOutcome.Rejected, detail: RejectedDetail)];
-        yield return [ReviewOrchestratorHarness.Ended(RunOutcome.OutputTruncated)];
-        yield return [new HttpRequestException("The AI service is unavailable.")];
+        object[] endings =
+        [
+            ReviewOrchestratorHarness.Ended(RunOutcome.Refused),
+            ReviewOrchestratorHarness.Ended(RunOutcome.InvalidOutput),
+            ReviewOrchestratorHarness.Ended(RunOutcome.Rejected, detail: RejectedDetail),
+            ReviewOrchestratorHarness.Ended(RunOutcome.OutputTruncated),
+            new HttpRequestException("The AI service is unavailable.")
+        ];
+
+        return endings.SelectMany(ending => new object[][] { [ending, 0], [ending, 1] });
     }
 
     /// <summary>
@@ -151,7 +157,7 @@ public class ReviewOrchestratorTests
     }
 
     [Fact]
-    public async Task ReviewPullRequestAsync_GivenOneFreeModelSlot_Should_WaitForItAndThenRunTheTwoRunsOneAtATime()
+    public async Task ReviewPullRequestAsync_GivenTheOnlyModelSlotIsHeldByAnotherReview_Should_WaitForItAndThenRunTheTwoRunsOneAtATime()
     {
         // Arrange — the test holds the process's only slot, and the first run holds the slot until the test lets it finish. Each run takes a slot
         // of its own, so the second run cannot start while the first one works.
@@ -200,13 +206,13 @@ public class ReviewOrchestratorTests
     }
 
     [Theory]
-    [MemberData(nameof(EndingsOfTheSecondRun))]
-    public async Task ReviewPullRequestAsync_GivenOneRunDoesNotComplete_Should_PostTheOtherRunsVerdictAsReviewedOnce(object ending)
+    [MemberData(nameof(EndingsOfTheOtherRun))]
+    public async Task ReviewPullRequestAsync_GivenOneRunDoesNotComplete_Should_PostTheOtherRunsVerdictAsReviewedOnce(object ending, int completedRun)
     {
-        // Arrange
+        // Arrange — whichever run completes, A or B, its verdict alone is published, with the footer naming the model that gave it
         var harness = new ReviewOrchestratorHarness
         {
-            ClaudeHandler = (index, _, _) => index == 0 ? Task.FromResult(ReviewOrchestratorHarness.Completed()) : Answer(ending)
+            ClaudeHandler = (index, _, _) => index == completedRun ? Task.FromResult(ReviewOrchestratorHarness.Completed()) : Answer(ending)
         };
 
         // Act
@@ -217,6 +223,7 @@ public class ReviewOrchestratorTests
         harness.ClaudeRequests.Should().HaveCount(2);
         var body = Comment(harness);
         body.Should().Contain("Reviewed once: the other review did not finish.");
+        body.Should().Contain($"(1 reviewed) · {SonnetModel} at ");
         body.Should().NotContain(RejectedDetail, "the service's text about a rejected request stays in the logs");
         ShouldBeMarked(body, ReviewRecordOutcome.Reviewed);
         harness.CreatedCheckRuns.Should().ContainSingle().Which.Conclusion.Should().Be(CheckRunConclusion.Neutral);
@@ -277,6 +284,27 @@ public class ReviewOrchestratorTests
         // Assert
         await act.Should().ThrowAsync<HttpRequestException>();
         ShouldHavePublishedNothing(harness);
+    }
+
+    [Fact]
+    public async Task ReviewPullRequestAsync_GivenBothRunsThrow_Should_LogTheFailureItDoesNotRethrowAsAWarning()
+    {
+        // Arrange — only one failure can be rethrown; the other would otherwise be seen by nobody
+        var harness = new ReviewOrchestratorHarness
+        {
+            ClaudeHandler = (index, _, _) => index == 0
+                ? Task.FromException<ClaudeRunResult>(new HttpRequestException("The AI service is unavailable."))
+                : Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."))
+        };
+
+        // Act
+        var act = () => harness.RunAsync();
+
+        // Assert
+        await act.Should().ThrowAsync<HttpRequestException>();
+        var entry = harness.Logger.Entries.Should().ContainSingle(entry => entry.Level == LogLevel.Warning).Subject;
+        entry.Message.Should().Contain("Run 1 of the review of my-org/my-service#7 also failed");
+        entry.Exception.Should().BeOfType<InvalidOperationException>();
     }
 
     [Fact]
@@ -346,6 +374,29 @@ public class ReviewOrchestratorTests
         var body = Comment(harness);
         body.Should().StartWith("Review failed - no verdict").And.Contain(reason).And.NotContain(RejectedDetail);
         ShouldBeMarked(body, ReviewRecordOutcome.Failed);
+    }
+
+    [Theory]
+    [InlineData(RunOutcome.Rejected, RunOutcome.Rejected, LogLevel.Error)]
+    [InlineData(RunOutcome.Refused, RunOutcome.Refused, LogLevel.Warning)]
+    [InlineData(RunOutcome.Rejected, RunOutcome.Refused, LogLevel.Warning)]
+    public async Task ReviewPullRequestAsync_GivenBothRunsEndWithoutAnAnswer_Should_LogAnErrorOnlyWhenEveryRunWasRejected(
+        RunOutcome first, RunOutcome second, LogLevel expectedLevel)
+    {
+        // Arrange — a request the service rejects is wrong in itself (a model that does not take the output format or the effort), so every review
+        // fails the same way until an operator acts: the one place that says so above Information. The service's text stays out of the line.
+        var harness = new ReviewOrchestratorHarness
+        {
+            ClaudeHandler = (index, _, _) => Task.FromResult(ReviewOrchestratorHarness.Ended(index == 0 ? first : second, detail: RejectedDetail))
+        };
+
+        // Act
+        await harness.RunAsync();
+
+        // Assert
+        var entry = harness.Logger.Entries.Should().ContainSingle(entry => entry.Level >= LogLevel.Warning).Subject;
+        entry.Level.Should().Be(expectedLevel);
+        entry.Message.Should().Contain("my-org/my-service#7").And.Contain(first.ToString()).And.Contain(SonnetModel).And.NotContain(RejectedDetail);
     }
 
     // ── Reviewed once per pull request and commit ────────────────────────────
@@ -652,6 +703,8 @@ public class ReviewOrchestratorTests
         body.Should().Contain("3005 files +10 -2 (1 reviewed)");
         result.IsPartial.Should().BeFalse();
         metrics.Has("github_review_app.reviews.partial").Should().BeFalse();
+        harness.Logger.Entries.Should().ContainSingle(entry => entry.Message.StartsWith(RecordPrefix, StringComparison.Ordinal))
+            .Which.Message.Should().Contain("3004 left out, 3003 not listed by GitHub", "the record counts what the comment counts");
     }
 
     [Theory]
@@ -903,6 +956,36 @@ public class ReviewOrchestratorTests
         FailureClassifier.IsTransient(failure).Should().BeTrue();
         modelWasCancelled.Task.IsCompletedSuccessfully.Should().BeTrue("the request is abandoned, not left running");
         ShouldHavePublishedNothing(harness);
+    }
+
+    [Fact]
+    public async Task ReviewPullRequestAsync_GivenOneRunFinishedBeforeTheLimitRanOut_Should_KeepItForTheRetry()
+    {
+        // Arrange — the guide promises that a run which finished before the deadline is not paid for again by the retry on the same instance
+        var harness = new ReviewOrchestratorHarness { Options = new ReviewOptions { MaxReviewDurationSeconds = 600 } };
+        var firstRunAnswered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRunStalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.ClaudeHandler = async (index, _, cancellationToken) =>
+        {
+            (index == 0 ? firstRunAnswered : secondRunStalled).TrySetResult();
+            await (index == 0 ? Task.CompletedTask : Stall.UntilCancelledAsync(cancellationToken));
+
+            return ReviewOrchestratorHarness.Completed();
+        };
+
+        // Act
+        var firstAttempt = harness.RunAsync();
+        await Task.WhenAll(firstRunAnswered.Task, secondRunStalled.Task).WaitAsync(_hangGuard);
+        harness.Time.Advance(TimeSpan.FromSeconds(601));
+        var act = () => firstAttempt.WaitAsync(_hangGuard);
+        await act.Should().ThrowAsync<TimeoutException>();
+        harness.ClaudeHandler = (_, _, _) => Task.FromResult(ReviewOrchestratorHarness.Completed());
+        var retry = await harness.RunAsync();
+
+        // Assert
+        harness.ClaudeRequests.Should().HaveCount(3, "the first attempt made two calls and the retry paid only for the run that had not finished");
+        retry.Status.Should().Be(ReviewRunStatus.Posted);
+        retry.RunCount.Should().Be(2);
     }
 
     [Fact]

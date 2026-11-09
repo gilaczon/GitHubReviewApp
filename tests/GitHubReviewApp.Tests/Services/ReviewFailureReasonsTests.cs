@@ -92,14 +92,28 @@ public class ReviewFailureReasonsTests
     }
 
     [Fact]
-    public void RetriesExhausted_GivenAnAuthorWhoWantsAnotherTry_Should_SayHowAndWhoToTellIfItKeepsHappening()
+    public void RetriesExhausted_GivenAnAuthorWhoWantsAnotherTry_Should_SayWhoToTellAndLeaveHowToTheNotice()
     {
-        // Arrange
+        // Arrange — the notice built around every reason says how to try again, so the reason saying it too would tell the author twice
 
         // Act
         var notice = ReviewFailureReasons.RetriesExhausted;
 
         // Assert
-        notice.Should().Contain("new commit").And.Contain("whoever runs this review app");
+        notice.Should().Contain("whoever runs this review app").And.NotContain("new commit");
+    }
+
+    [Theory]
+    [MemberData(nameof(Notices))]
+    public void Notice_GivenTheWholeFailureNotice_Should_SayHowToTryAgainExactlyOnce(string reason)
+    {
+        // Arrange
+        var context = new ReviewContext("my-org", "my-service", 7, "feature/x", "main", "dev1", "0123456789abcdef0123456789abcdef01234567", 1, 1, 0, 0, 0, []);
+
+        // Act
+        var notice = ChecklistCommentFormatter.FormatFailure(context, reason);
+
+        // Assert
+        Regex.Matches(notice, "new commit").Should().ContainSingle();
     }
 }

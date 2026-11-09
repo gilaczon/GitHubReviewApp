@@ -47,7 +47,8 @@ public class ReviewRecordLogTests
         };
 
         // Act
-        ReviewRecordLog.Write(logger, _message, _choice, runs, Merged(), new ReviewOutcome(ReviewVerdict.PassWithComments, 1), _input, 0.012m, TimeSpan.FromMilliseconds(1_500));
+        ReviewRecordLog.Write(
+            logger, _message, _choice, runs, Merged(), new ReviewOutcome(ReviewVerdict.PassWithComments, 1), _input, unlistedFileCount: 0, 0.012m, TimeSpan.FromMilliseconds(1_500));
 
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;
@@ -58,8 +59,22 @@ public class ReviewRecordLogTests
         entry.Message.Should().Contain("tokens in 1000 out 500 cache_read 200 cache_write 100 cost 0.007");
         entry.Message.Should().Contain("run 1 transient_failure claude-sonnet-5-5 none [] tokens in 0 out 0 cache_read 0 cache_write 0 cost unknown");
         entry.Message.Should().Contain("result pass_with_comments, 1 serious, runs agreed False");
-        entry.Message.Should().Contain("files 2 included, 1 partial, 1 left out");
+        entry.Message.Should().Contain("files 2 included, 1 partial, 1 left out, 0 not listed by GitHub");
         entry.Message.Should().Contain("cost 0.012 USD").And.Contain("took 1500 ms");
+    }
+
+    [Fact]
+    public void Write_GivenFilesGitHubDidNotList_Should_CountThemAsLeftOutAsTheCommentDoes()
+    {
+        // Arrange — two listed files are included or partial, the lockfile is left out, and 3,003 more were never listed
+        var logger = new ListLogger<ReviewRecordLogTests>();
+
+        // Act
+        ReviewRecordLog.Write(
+            logger, _message, _choice, [CompletedRun()], Merged(), new ReviewOutcome(ReviewVerdict.PassWithComments, 0), _input, unlistedFileCount: 3_003, 0.007m, TimeSpan.Zero);
+
+        // Assert
+        logger.Entries.Should().ContainSingle().Which.Message.Should().Contain("files 2 included, 1 partial, 3004 left out, 3003 not listed by GitHub");
     }
 
     [Fact]
@@ -70,7 +85,7 @@ public class ReviewRecordLogTests
         var runs = new[] { new RunRecord(0, "Refused", "claude-sonnet-5-5", null, string.Empty, ClaudeUsage.Empty, null) };
 
         // Act
-        ReviewRecordLog.Write(logger, _message, _choice, runs, merged: null, outcome: null, _input, totalCost: null, TimeSpan.Zero);
+        ReviewRecordLog.Write(logger, _message, _choice, runs, merged: null, outcome: null, _input, unlistedFileCount: 0, totalCost: null, TimeSpan.Zero);
 
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;

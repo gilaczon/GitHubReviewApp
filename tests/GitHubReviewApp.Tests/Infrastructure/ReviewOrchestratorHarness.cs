@@ -65,7 +65,7 @@ internal sealed class ReviewOrchestratorHarness
             {
                 RecordToken("pull-request", token);
                 var call = Interlocked.Increment(ref _pullRequestCalls);
-                return Task.FromResult(PullRequestByCall?.Invoke(call) ?? (call == 1 ? PullRequest : PullRequestAfterModel ?? PullRequest));
+                return Task.FromResult(call == 1 ? PullRequest : PullRequestAfterModel ?? PullRequest);
             });
 
         GitHub.Setup(g => g.GetPullRequestFilesAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -202,9 +202,6 @@ internal sealed class ReviewOrchestratorHarness
     /// <summary>What <c>CanWriteChecks</c> answers once a token has been fetched. False means the installation never granted the Checks permission.</summary>
     public bool CanWriteChecks { get; set; } = true;
 
-    /// <summary>When set, decides the pull request returned by the Nth <c>GetPullRequestAsync</c> call (1-based).</summary>
-    public Func<int, PullRequestInfo?>? PullRequestByCall { get; set; }
-
     public PullRequestInfo PullRequest { get; set; } = new(
         "open",
         false,
@@ -238,6 +235,10 @@ internal sealed class ReviewOrchestratorHarness
     /// <summary>The comments on this harness's pull request, the app's own included once written.</summary>
     public List<IssueComment> Comments => CommentsOn(PrNumber);
 
+    /// <summary>
+    /// The check run and comment writes in the order they succeeded (<c>check-run</c>, <c>comment:create</c>, <c>comment:update</c>). A comment write
+    /// that <see cref="CommentWriteHandler"/> fails is not recorded.
+    /// </summary>
     public IReadOnlyList<string> CallOrder => Snapshot(_callOrder);
 
     public IReadOnlyList<CheckRunRequest> CreatedCheckRuns => Snapshot(_createdCheckRuns);
@@ -248,7 +249,10 @@ internal sealed class ReviewOrchestratorHarness
 
     public IReadOnlyList<ClaudeRunRequest> ClaudeRequests => Snapshot(_claudeRequests);
 
-    /// <summary>Every GitHub call in the order it was made (<c>pull-request</c>, <c>files</c>, <c>comments</c>, <c>check-run</c>, <c>comment:create</c>, <c>comment:update</c>), with the token it used.</summary>
+    /// <summary>
+    /// Every GitHub call in the order it was made (<c>pull-request</c>, <c>files</c>, <c>comments</c>, <c>check-run</c>, <c>comment:create</c>,
+    /// <c>comment:update</c>), with the token it used, except a comment write that <see cref="CommentWriteHandler"/> failed, which is not recorded.
+    /// </summary>
     public IReadOnlyList<(string Operation, string Token)> UsedTokens => Snapshot(_usedTokens);
 
     /// <summary>

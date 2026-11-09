@@ -9,7 +9,8 @@ public class GitHubService : IGitHubService
     private const int ItemsPerPage = 100;
     private const int MaxFilePages = 30;
 
-    // Comments are listed oldest first, so this app's newest review comment is on the last page. A pull request with this many comments is not normal.
+    // Comments are listed oldest first, and this app keeps one comment per pull request, updated in place, so its comment is normally on an early
+    // page. A pull request with this many comments is not normal.
     private const int MaxCommentPages = 30;
 
     private readonly HttpClient _httpClient;
@@ -92,7 +93,8 @@ public class GitHubService : IGitHubService
 
         if (!isComplete)
         {
-            // The newest comments are the ones left unread, so a review this app already posted may not be seen and could be posted again.
+            // The unread pages are the newest comments, so the app's own comment is missed only when it was first posted after this many others;
+            // then an existing review of the current commit is not seen and a second comment could be posted.
             _logger.LogWarning(
                 "{Owner}/{Repo}#{PrNumber} has more than {CommentCount} comments. Only the first {CommentCount} were read, so an existing review of the current commit may be missed.",
                 owner, repo, prNumber, MaxCommentPages * ItemsPerPage, MaxCommentPages * ItemsPerPage);
@@ -105,7 +107,7 @@ public class GitHubService : IGitHubService
         string owner, string repo, int prNumber, string body, string token, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Post, IssueCommentsUrl(owner, repo, prNumber), token);
-        request.Content = JsonContent(new { body });
+        request.Content = ToJsonContent(new { body });
 
         return await SendForIdAsync<GitHubIssueCommentDto>(request, "create the comment", dto => dto.Id, cancellationToken);
     }
@@ -116,7 +118,7 @@ public class GitHubService : IGitHubService
         var url = $"/repos/{Escape(owner)}/{Escape(repo)}/issues/comments/{commentId}";
 
         using var request = CreateRequest(HttpMethod.Patch, url, token);
-        request.Content = JsonContent(new { body });
+        request.Content = ToJsonContent(new { body });
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, "update the comment", cancellationToken);
@@ -136,7 +138,7 @@ public class GitHubService : IGitHubService
         };
 
         using var request = CreateRequest(HttpMethod.Post, $"/repos/{Escape(owner)}/{Escape(repo)}/check-runs", token);
-        request.Content = JsonContent(payload);
+        request.Content = ToJsonContent(payload);
 
         return await SendForIdAsync<GitHubCheckRunDto>(request, "create the check run", dto => dto.Id, cancellationToken);
     }
@@ -170,7 +172,7 @@ public class GitHubService : IGitHubService
         };
     }
 
-    private static StringContent JsonContent(object payload)
+    private static StringContent ToJsonContent(object payload)
     {
         return new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
     }

@@ -27,5 +27,5 @@ public interface IGitHubService
 
     /// <summary>Creates a completed check run on the request's commit and returns its id.</summary>
     Task<long> CreateCheckRunAsync(
-        string owner, string repo, CheckRunRequest request, string token, CancellationToken cancellationToken);
+        string owner, string repo, CheckRunRequest checkRun, string token, CancellationToken cancellationToken);
 }

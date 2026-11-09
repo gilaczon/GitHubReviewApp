@@ -1,8 +1,8 @@
 namespace GitHubReviewApp.Services;
 
 /// <summary>
-/// Caps how many model requests this process has in flight at once, across every review. Several queued reviews each running several parts
-/// in parallel could otherwise send enough requests together to trip the provider's rate limit for every repository that shares the key.
+/// Caps how many model requests this process has in flight at once, across every review. Several queued reviews, each running its two runs at
+/// once, could otherwise send enough requests together to trip the provider's rate limit for every repository that shares the key.
 /// </summary>
 public sealed class ModelRequestLimiter
 {

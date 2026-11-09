@@ -11,7 +11,11 @@ internal static class ReviewRecordLog
     private const string NoValue = "none";
     private const string UnknownCost = "unknown";
 
-    /// <summary>Logs the record of one finished review. <paramref name="merged"/> and <paramref name="outcome"/> are null for a review that failed.</summary>
+    /// <summary>
+    /// Logs the record of one finished review. <paramref name="merged"/> and <paramref name="outcome"/> are null for a review that failed.
+    /// <paramref name="unlistedFileCount"/> is the number of changed files GitHub did not list (a pull request of more than 3,000 files): they
+    /// are counted as left out, as the comment counts them.
+    /// </summary>
     public static void Write(
         ILogger logger,
         ReviewQueueMessage message,
@@ -20,15 +24,17 @@ internal static class ReviewRecordLog
         MergedReview? merged,
         ReviewOutcome? outcome,
         ReviewInput input,
+        int unlistedFileCount,
         decimal? totalCost,
         TimeSpan duration)
     {
-        var leftOutCount = input.Files.Count - input.IncludedFileCount;
+        // The same count as the comment's: every listed file not included, plus the files GitHub did not list at all.
+        var leftOutCount = input.Files.Count - input.IncludedFileCount + unlistedFileCount;
 
         logger.LogInformation(
             "Review record for {Owner}/{Repo}#{PrNumber} at {HeadSha}: model {Model} ({Tier}, {ChoiceReason}); runs {Runs}; "
             + "result {Result}, {SeriousCount} serious, runs agreed {IsUnanimous}; files {IncludedFileCount} included, {PartialFileCount} partial, "
-            + "{LeftOutFileCount} left out; cost {TotalCost} USD; took {DurationMilliseconds} ms.",
+            + "{LeftOutFileCount} left out, {UnlistedFileCount} not listed by GitHub; cost {TotalCost} USD; took {DurationMilliseconds} ms.",
             message.Owner,
             message.Repo,
             message.PrNumber,
@@ -43,6 +49,7 @@ internal static class ReviewRecordLog
             input.IncludedFileCount,
             input.PartialFileCount,
             leftOutCount,
+            unlistedFileCount,
             CostText(totalCost),
             (long)duration.TotalMilliseconds);
     }

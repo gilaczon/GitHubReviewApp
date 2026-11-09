@@ -216,18 +216,26 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
 
         var endings = await Task.WhenAll(Enumerable.Range(0, RunsPerReview).Select(index => EndRunAsync(message, request, index, cancellationToken)));
 
-        if (!endings.Any(ending => ending.IsCompleted) && FailureToRethrow(endings) is { } failure)
+        var isAnyRunCompleted = endings.Any(ending => ending.IsCompleted);
+
+        if (!isAnyRunCompleted && FailureToRethrow(endings) is { } failure)
         {
+            LogOtherFailures(message, endings, failure);
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
         LogFailedRuns(message, endings);
 
+        if (!isAnyRunCompleted)
+        {
+            LogNoAnswer(message, endings, choice);
+        }
+
         // GitHub lists at most 3,000 of a pull request's files. The ones it did not list were not reviewed either.
         var unlistedCount = Math.Max(0, pullRequest.ChangedFileCount - files.Count);
         var paths = new PathResolver(files);
         var context = BuildContext(message, pullRequest, input, unlistedCount, endings, choice);
-        var publication = endings.Any(ending => ending.IsCompleted)
+        var publication = isAnyRunCompleted
             ? BuildReview(message, context, endings, paths)
             : BuildFailure(message, context, FailureReason(endings));
 
@@ -263,7 +271,7 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         await _publisher.PublishAsync(
             message, token, appLogin, currentComments, publication.Body, publication.CheckRun, canWriteChecks, cancellationToken);
 
-        RecordFinishedReview(message, pullRequest, input, choice, endings, publication, startedAt);
+        RecordFinishedReview(message, pullRequest, input, choice, endings, publication, unlistedCount, startedAt);
 
         return publication.Outcome is { } outcome
             ? ReviewRunResult.Posted(outcome.Verdict, publication.Merged!.RunCount, input.IncludedFileCount, IsPartial(input))
@@ -326,14 +334,54 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
 
     private void LogFailedRuns(ReviewQueueMessage message, IReadOnlyList<RunEnding> endings)
     {
-        // Only reached when the other run completed, or when neither threw: the failure does not stop the review, so it is logged here.
+        // Only reached when the other run completed, or when neither threw: the failure does not stop the review, so it is logged here. Whether
+        // the completed run's verdict is published is decided by the stale and already-reviewed checks that follow.
         foreach (var ending in endings.Where(ending => ending.Failure is not null))
         {
             _logger.LogWarning(
                 ending.Failure,
-                "Run {RunIndex} of the review of {Owner}/{Repo}#{PrNumber} failed; publishing the verdict of the run that completed.",
+                "Run {RunIndex} of the review of {Owner}/{Repo}#{PrNumber} failed; the run that completed is used on its own.",
                 ending.Index, message.Owner, message.Repo, message.PrNumber);
         }
+    }
+
+    /// <summary>
+    /// When no run completed and more than one threw, only one failure is rethrown and would be the only one seen: the others are logged here,
+    /// with their exceptions, before the throw.
+    /// </summary>
+    private void LogOtherFailures(ReviewQueueMessage message, IReadOnlyList<RunEnding> endings, Exception rethrown)
+    {
+        foreach (var ending in endings.Where(ending => ending.Failure is not null && !ReferenceEquals(ending.Failure, rethrown)))
+        {
+            _logger.LogWarning(
+                ending.Failure,
+                "Run {RunIndex} of the review of {Owner}/{Repo}#{PrNumber} also failed; the other run's failure is rethrown.",
+                ending.Index, message.Owner, message.Repo, message.PrNumber);
+        }
+    }
+
+    /// <summary>
+    /// When no run completed and nothing was thrown, "Review failed" is published and the processor counts it as a review that worked as
+    /// designed, so this is the only place that says so above Information. Every run ending Rejected means the request itself is wrong (a model
+    /// that does not take the output format or the effort), so every review will fail the same way until an operator acts: an error. Anything
+    /// else (refusals, truncated or unreadable answers) is the model's doing on this one change: a warning. Outcomes and the model id only: a
+    /// rejected run's detail is the service's text, which ClaudeService has logged already.
+    /// </summary>
+    private void LogNoAnswer(ReviewQueueMessage message, IReadOnlyList<RunEnding> endings, ModelChoice choice)
+    {
+        var outcomes = string.Join(", ", endings.Select(ending => ending.Run!.Outcome));
+
+        if (endings.All(ending => ending.Run!.Outcome == RunOutcome.Rejected))
+        {
+            _logger.LogError(
+                "Every run of the review of {Owner}/{Repo}#{PrNumber} was rejected by the AI service ({Outcomes}) on model {Model}: the request itself is wrong, so every review will fail the same way until the model or the request settings change. \"Review failed\" is published.",
+                message.Owner, message.Repo, message.PrNumber, outcomes, choice.Model);
+            return;
+        }
+
+        _logger.LogWarning(
+            "No run of the review of {Owner}/{Repo}#{PrNumber} gave an answer ({Outcomes}) on model {Model}. \"Review failed\" is published.",
+            message.Owner, message.Repo, message.PrNumber, outcomes, choice.Model);
     }
 
     private static ReviewContext BuildContext(
@@ -422,6 +470,7 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         ModelChoice choice,
         IReadOnlyList<RunEnding> endings,
         Publication publication,
+        int unlistedCount,
         long startedAt)
     {
         var runs = endings.Select(ending => ToRunRecord(ending, choice)).ToList();
@@ -450,7 +499,16 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         }
 
         ReviewRecordLog.Write(
-            _logger, message, choice, runs, publication.Merged, publication.Outcome, input, totalCost, _timeProvider.GetElapsedTime(startedAt));
+            _logger,
+            message,
+            choice,
+            runs,
+            publication.Merged,
+            publication.Outcome,
+            input,
+            unlistedCount,
+            totalCost,
+            _timeProvider.GetElapsedTime(startedAt));
     }
 
     private static void RecordVerdict(MergedReview merged, ReviewOutcome outcome)

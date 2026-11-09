@@ -351,8 +351,9 @@ model.
 
 One structured log line per finished review (Information): repository, PR number, head SHA, model chosen, run count, for each run
 its outcome, answering model, own result, the eight statuses as a compact string, tokens (input, output, cache read, cache write)
-and cost; the merged result, serious count, whether the runs agreed, the number of files included, partial and left out, the
-total cost and the duration. No diff text, no notes, findings or summary, no titles or descriptions, no secrets.
+and cost; the merged result, serious count, whether the runs agreed, the number of files included, partial and left out (the same
+count as the comment's, so the files GitHub did not list are in it) and how many GitHub did not list, the total cost and the
+duration. No diff text, no notes, findings or summary, no titles or descriptions, no secrets.
 
 Cost per attempt = (input x input price + output x output price + cache write x cache-write price + cache read x cache-read price) /
 1,000,000, from the static price table `Claude:Pricing` (USD per million tokens):
@@ -395,8 +396,9 @@ Vault through TopSecret, per `/dev-appconfig-integrate`):
   secret, never its value.
 - Selects only keys `GitHubReviewApp:Runtime:*` (no label), trimming `GitHubReviewApp:`, so the store can never reach the static
   settings. Refresh on the sentinel `GitHubReviewApp:Sentinel` (refresh all), every 120 seconds in Production and 30 otherwise,
-  driven by the app's own Functions worker middleware (`AppConfigurationRefreshMiddleware`, which calls `TryRefreshAsync` on each
-  refresher, as the `Microsoft.Azure.AppConfiguration.Functions.Worker` middleware does).
+  driven by the app's own Functions worker middleware (`AppConfigurationRefreshMiddleware`, which starts `TryRefreshAsync` on each
+  refresher without awaiting it and outside the invocation's execution context, as the `Microsoft.Azure.AppConfiguration.Functions.Worker`
+  middleware does, so a refresh never delays an invocation and its HTTP spans do not parent to the host's unexported invocation span).
 - Read through a purpose-built holder, never `IOptionsMonitor` with validation: on each configuration change it parses and validates
   each of the three values on its own (model ids must look like `claude-[a-z0-9.-]+`, at most 100 characters; the switch must be a
   boolean). A missing key takes its default; an invalid key keeps its last good value (its default at startup) and logs a warning
@@ -416,7 +418,7 @@ optional `AppConfigurationConnectionString` (the store's read-only connection st
 | One run `Completed`, the other ended any other way | Verdict from the one run, "Reviewed once: the other review did not finish." |
 | No run completed, and at least one failed transiently | Rethrown: the queue retries (three attempts, five minutes apart). After the last, the poison handler posts "Review failed" with the existing `RetriesExhausted` reason ("The automated review could not be completed after several attempts. ..."), which names no cause on purpose: a timeout, a spending cap or an outage look the same from the app. |
 | No run completed, a permanent failure (bad key or model name, spend limit) | Existing path: reported at once as "Review failed" with the existing reasons. |
-| No run completed; both ended `Refused`, `OutputTruncated`, `InvalidOutput` or `Rejected` | "Review failed" at once, not retried, with a reason naming what happened ("Both reviews were declined by the AI service's safety checks.", "Both reviews ran out of output space before finishing.", "Neither review returned a readable answer.", "The AI service refused the review request.", or "Neither review finished." when they differ). |
+| No run completed; both ended `Refused`, `OutputTruncated`, `InvalidOutput` or `Rejected` | "Review failed" at once, not retried, with a reason naming what happened ("Both reviews were declined by the AI service's safety checks.", "Both reviews ran out of output space before finishing.", "Neither review returned a readable answer.", "The AI service refused the review request.", or "Neither review finished." when they differ). The orchestrator logs this once above Information, naming the outcomes and the model id only: an Error when every run was `Rejected` (the request itself is wrong, so every review fails the same way until an operator acts), a Warning otherwise. When both runs threw, the failure that is not rethrown is logged as a Warning with its exception before the other is rethrown. |
 
 "Review failed" means a neutral "Review failed" check run (5.9) and the "Review failed" comment (5.8), in that order. It is not
 posted when the PR has since closed, become a draft or moved to a newer commit, or when the PR already has a `reviewed` record for

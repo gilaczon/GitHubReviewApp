@@ -12,10 +12,11 @@ public static class ReviewFailureReasons
         "If this keeps happening, please tell whoever runs this review app.";
 
     // Names no cause on purpose. All the app knows is that every attempt failed; a timeout under its own limits, a spending cap or a changed
-    // reply look the same from here as an outage does, so a notice that blamed one would sometimes be wrong.
+    // reply look the same from here as an outage does, so a notice that blamed one would sometimes be wrong. How to try again is not said here:
+    // the notice ChecklistCommentFormatter.FormatFailure builds around every reason says it once.
     public const string RetriesExhausted =
         "The automated review could not be completed after several attempts. " +
-        "This is usually temporary, so pushing a new commit will start a new review. " +
+        "This is usually temporary. " +
         "If it keeps happening, please tell whoever runs this review app.";
 
     // What a review says when both model runs ended without an answer (design 5.12). The first four name what both runs ended with; the last
