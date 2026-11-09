@@ -635,9 +635,11 @@ public class ReviewOrchestratorTests
     }
 
     [Fact]
-    public async Task ReviewPullRequestAsync_GivenMoreChangedFilesThanGitHubListed_Should_CountTheUnlistedFilesAsNotReviewed()
+    public async Task ReviewPullRequestAsync_GivenMoreChangedFilesThanGitHubListed_Should_CountTheUnlistedFilesAsNotReviewedButNotAsPartial()
     {
-        // Arrange — GitHub lists at most 3,000 files; these two are listed, the lockfile is never read, and 3,003 more were not listed
+        // Arrange — GitHub lists at most 3,000 files; these two are listed, the lockfile is never read, and 3,003 more were not listed.
+        // The comment counts the unlisted files as not reviewed; partial is only partial + over budget + no diff among the listed files.
+        using var metrics = new MetricsRecorder();
         var harness = new ReviewOrchestratorHarness();
         harness.PullRequest = harness.PullRequest with { ChangedFileCount = 3_005 };
 
@@ -648,7 +650,8 @@ public class ReviewOrchestratorTests
         var body = Comment(harness);
         body.Should().Contain("3004 of 3005 changed files were not reviewed in full.");
         body.Should().Contain("3005 files +10 -2 (1 reviewed)");
-        result.IsPartial.Should().BeTrue();
+        result.IsPartial.Should().BeFalse();
+        metrics.Has("github_review_app.reviews.partial").Should().BeFalse();
     }
 
     [Theory]

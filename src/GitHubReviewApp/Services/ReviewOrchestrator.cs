@@ -263,10 +263,10 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         await _publisher.PublishAsync(
             message, token, appLogin, currentComments, publication.Body, publication.CheckRun, canWriteChecks, cancellationToken);
 
-        RecordFinishedReview(message, pullRequest, input, unlistedCount, choice, endings, publication, startedAt);
+        RecordFinishedReview(message, pullRequest, input, choice, endings, publication, startedAt);
 
         return publication.Outcome is { } outcome
-            ? ReviewRunResult.Posted(outcome.Verdict, publication.Merged!.RunCount, input.IncludedFileCount, IsPartial(input, unlistedCount))
+            ? ReviewRunResult.Posted(outcome.Verdict, publication.Merged!.RunCount, input.IncludedFileCount, IsPartial(input))
             : ReviewRunResult.Failed();
     }
 
@@ -370,11 +370,11 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
             models.AsReadOnly());
     }
 
-    private static bool IsPartial(ReviewInput input, int unlistedCount)
+    private static bool IsPartial(ReviewInput input)
     {
-        // Partial means something that could have been read was not read in full. A lockfile or a binary is never read, so it does not count;
-        // a file GitHub did not list does.
-        return input.PartialFileCount + input.OverBudgetFileCount + input.NoDiffFileCount + unlistedCount > 0;
+        // Partial means a listed file that could have been read was not read in full. A lockfile or a binary is never read, so it does not
+        // count; nor does a file GitHub did not list, which the comment still counts as not reviewed.
+        return input.PartialFileCount + input.OverBudgetFileCount + input.NoDiffFileCount > 0;
     }
 
     private static Publication BuildReview(ReviewQueueMessage message, ReviewContext context, IReadOnlyList<RunEnding> endings, PathResolver paths)
@@ -419,7 +419,6 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         ReviewQueueMessage message,
         PullRequestInfo pullRequest,
         ReviewInput input,
-        int unlistedCount,
         ModelChoice choice,
         IReadOnlyList<RunEnding> endings,
         Publication publication,
@@ -444,7 +443,7 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
             AppMeters.FilesReviewed.Add(input.IncludedFileCount);
             AppMeters.PullRequestChangedLines.Record(pullRequest.ChangedLineCount);
 
-            if (IsPartial(input, unlistedCount))
+            if (IsPartial(input))
             {
                 AppMeters.ReviewsPartial.Add(1);
             }

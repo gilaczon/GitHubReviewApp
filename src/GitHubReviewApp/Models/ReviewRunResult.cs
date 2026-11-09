@@ -4,7 +4,7 @@ namespace GitHubReviewApp.Models;
 /// What happened when a queued pull request was processed. <paramref name="Verdict"/> is set only for a posted review, and
 /// <paramref name="SkipReason"/> only for a skipped one. <paramref name="RunCount"/> is the number of model runs that completed and were merged
 /// (one or two), <paramref name="IncludedFileCount"/> the files whose diff was sent whole or cut, and <paramref name="IsPartial"/> says some
-/// changed file that could have been read was not read in full.
+/// file GitHub listed that could have been read was not read in full (a file GitHub did not list does not make a review partial).
 /// </summary>
 public sealed record ReviewRunResult(
     ReviewRunStatus Status,
