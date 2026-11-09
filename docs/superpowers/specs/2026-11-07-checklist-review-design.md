@@ -414,7 +414,7 @@ optional `AppConfigurationConnectionString` (the store's read-only connection st
 |---|---|
 | Both runs `Completed` | Verdict, "Reviewed twice ..." |
 | One run `Completed`, the other ended any other way | Verdict from the one run, "Reviewed once: the other review did not finish." |
-| No run completed, and at least one failed transiently | Rethrown: the queue retries (three attempts, five minutes apart). After the last, the poison handler posts "Review failed" ("The AI service or GitHub could not be reached; three attempts failed."). |
+| No run completed, and at least one failed transiently | Rethrown: the queue retries (three attempts, five minutes apart). After the last, the poison handler posts "Review failed" with the existing `RetriesExhausted` reason ("The automated review could not be completed after several attempts. ..."), which names no cause on purpose: a timeout, a spending cap or an outage look the same from the app. |
 | No run completed, a permanent failure (bad key or model name, spend limit) | Existing path: reported at once as "Review failed" with the existing reasons. |
 | No run completed; both ended `Refused`, `OutputTruncated`, `InvalidOutput` or `Rejected` | "Review failed" at once, not retried, with a reason naming what happened ("Both reviews were declined by the AI service's safety checks.", "Both reviews ran out of output space before finishing.", "Neither review returned a readable answer.", "The AI service refused the review request.", or "Neither review finished." when they differ). |
 
