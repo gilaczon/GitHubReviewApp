@@ -126,19 +126,6 @@ public class FailureClassifierTests
     }
 
     [Fact]
-    public void IsTransient_GivenTheAiServiceRejectedEveryPart_Should_BeFalseBecauseTheSameRequestIsRefusedAgain()
-    {
-        // Arrange
-        var exception = new AiServiceRejectedRequestException("The AI service rejected the request.");
-
-        // Act
-        var result = FailureClassifier.IsTransient(exception);
-
-        // Assert
-        result.Should().BeFalse();
-    }
-
-    [Fact]
     public async Task IsTransient_GivenANetworkFailureReachingAnthropic_Should_BeTrue()
     {
         // Arrange
@@ -148,7 +135,7 @@ public class FailureClassifierTests
             .AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = "sk-ant-test" })
             .Build();
         var sut = new ClaudeService(new HttpClient(failingHandler), config, Options.Create(new ClaudeOptions { MaxRetries = 0 }), NullLogger<ClaudeService>.Instance);
-        var act = () => sut.ReviewAsync(new ClaudeReviewRequest("s", "u"), CancellationToken.None);
+        var act = () => sut.ReviewAsync(new ClaudeRunRequest("claude-sonnet-5-5", "s", "u"), CancellationToken.None);
         var exception = (await act.Should().ThrowAsync<Exception>()).Which;
 
         // Act

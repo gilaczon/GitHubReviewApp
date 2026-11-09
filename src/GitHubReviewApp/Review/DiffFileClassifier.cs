@@ -115,26 +115,6 @@ public static class DiffFileClassifier
         ".sh", ".bash", ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".bicep", ".tf"
     };
 
-    /// <summary>Why a file cannot be reviewed as text, judged from its path alone, or null when it can.</summary>
-    public static FileSkipReason? GetSkipReason(string path)
-    {
-        var segments = SplitPath(path);
-
-        if (segments.Length == 0)
-        {
-            return null;
-        }
-
-        var fileName = segments[^1];
-
-        if (IsLockfileName(fileName))
-        {
-            return FileSkipReason.DependencyLockfile;
-        }
-
-        return IsBinaryOrMinifiedName(fileName) ? FileSkipReason.BinaryOrMinified : null;
-    }
-
     /// <summary>
     /// How much is at stake in a changed file (design 5.3). The first rule that matches wins: a lockfile, binary or minified file is not
     /// readable; then generated or vendored code; tests; documentation; the high-risk areas, by the words of the path; pipelines, container
@@ -208,51 +188,6 @@ public static class DiffFileClassifier
     public static bool IsExecutableOrArchive(string path)
     {
         return _executableOrArchiveExtensions.Contains(Path.GetExtension(path));
-    }
-
-    public static FilePriority GetPriority(string path, string status = "modified", string? patch = null)
-    {
-        var segments = SplitPath(path);
-
-        if (segments.Length == 0)
-        {
-            return FilePriority.Other;
-        }
-
-        var fileName = segments[^1];
-        var extension = Path.GetExtension(fileName);
-
-        if (IsGeneratedOrVendoredPath(segments, fileName) || IsNewFileWithGeneratedHeader(status, patch))
-        {
-            return FilePriority.GeneratedOrVendored;
-        }
-
-        if (_documentationExtensions.Contains(extension))
-        {
-            return FilePriority.Other;
-        }
-
-        if (IsPipelineOrContainerFile(segments, fileName))
-        {
-            return FilePriority.Source;
-        }
-
-        if (IsTestPath(segments, fileName))
-        {
-            return FilePriority.Tests;
-        }
-
-        if (_sourceExtensions.Contains(extension))
-        {
-            return FilePriority.Source;
-        }
-
-        if (_configurationExtensions.Contains(extension))
-        {
-            return FilePriority.Configuration;
-        }
-
-        return FilePriority.Other;
     }
 
     private static string[] SplitPath(string path)

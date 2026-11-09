@@ -65,13 +65,6 @@ internal static class AppMeters
             unit: "notices",
             description: "Attempts to post a failure notice to the pull request author that failed");
 
-    /// <summary>Tagged <c>outcome</c> with the <see cref="Models.ChunkOutcome"/> name. Counts every request, retried or discarded runs included.</summary>
-    internal static readonly Counter<long> ChunkRequests =
-        _meter.CreateCounter<long>(
-            "github_review_app.chunks",
-            unit: "requests",
-            description: "Model requests, by how they ended");
-
     /// <summary>
     /// Checklist runs that finished, tagged <c>outcome</c> with the <see cref="Models.RunOutcome"/> name and <c>model</c> with the model that
     /// answered (the one asked for when none did). A run that failed outright is thrown, not counted here.
@@ -131,20 +124,6 @@ internal static class AppMeters
             "github_review_app.files.reviewed",
             unit: "files",
             description: "Changed files sent to the model");
-
-    /// <summary>Tagged <c>reason</c> with the <see cref="Models.FileSkipReason"/> name.</summary>
-    internal static readonly Counter<long> FilesSkipped =
-        _meter.CreateCounter<long>(
-            "github_review_app.files.skipped",
-            unit: "files",
-            description: "Changed files left out of the review");
-
-    /// <summary>Tagged <c>severity</c>.</summary>
-    internal static readonly Counter<long> FindingsReported =
-        _meter.CreateCounter<long>(
-            "github_review_app.findings",
-            unit: "findings",
-            description: "Findings reported in posted reviews");
 
     // A review takes from a few seconds (nothing to read) to about twenty minutes (the limit of one review), and the OpenTelemetry default buckets
     // stop at ten seconds, so without these every review of any size would land in the overflow bucket and no percentile would mean anything.

@@ -111,6 +111,21 @@ public class AnthropicSdkContractTests
     }
 
     [Fact]
+    public async Task Aggregate_GivenABetaStreamThatEndsBeforeTheModelFinishes_Should_ThrowInvalidDataWithNoInnerExceptionAndTheEndMessageText()
+    {
+        // Arrange — the refusal fallback is on as the app ships, so a run reads the beta stream, and its cut-off must look like the standard one's
+        var response = AnthropicFixtures.StreamThatEndsBeforeTheModelFinishes();
+
+        // Act
+        var act = () => AggregateBetaAsync(response);
+
+        // Assert
+        var failure = (await act.Should().ThrowAsync<AnthropicInvalidDataException>()).Which;
+        failure.InnerException.Should().BeNull("the service reads a missing inner exception as 'the reply was cut off', not 'the reply was malformed'");
+        failure.Message.Should().Contain("End message");
+    }
+
+    [Fact]
     public async Task Aggregate_GivenAnEventThatIsNotJson_Should_ThrowInvalidDataWithAJsonExceptionInside()
     {
         // Arrange

@@ -13,11 +13,6 @@ public sealed class ClaudeOptionsValidator : IValidateOptions<ClaudeOptions>
     {
         var failures = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(options.Model))
-        {
-            failures.Add("Claude:Model must name a model, but it is empty.");
-        }
-
         if (options.MaxOutputTokens < 1)
         {
             failures.Add($"Claude:MaxOutputTokens must be at least 1, but it is {options.MaxOutputTokens}.");

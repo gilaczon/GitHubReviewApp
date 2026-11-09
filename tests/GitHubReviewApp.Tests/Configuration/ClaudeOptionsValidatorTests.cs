@@ -6,8 +6,6 @@ public class ClaudeOptionsValidatorTests
 
     public static IEnumerable<object[]> SettingsThatCannotWork()
     {
-        yield return [new ClaudeOptions { Model = "" }, "Claude:Model"];
-        yield return [new ClaudeOptions { Model = "   " }, "Claude:Model"];
         yield return [new ClaudeOptions { MaxOutputTokens = 0 }, "Claude:MaxOutputTokens"];
         yield return [new ClaudeOptions { MaxOutputTokens = -5 }, "Claude:MaxOutputTokens"];
         yield return [new ClaudeOptions { RequestTimeoutSeconds = 0 }, "Claude:RequestTimeoutSeconds"];
@@ -160,7 +158,7 @@ public class ClaudeOptionsValidatorTests
     public void Validate_GivenSeveralBadSettings_Should_ReportEveryOneSoTheyCanBeFixedInOneGo()
     {
         // Arrange
-        var options = new ClaudeOptions { Model = "", MaxOutputTokens = 0, MaxRetries = -1 };
+        var options = new ClaudeOptions { MaxOutputTokens = 0, RequestTimeoutSeconds = 0, MaxRetries = -1 };
 
         // Act
         var result = _sut.Validate(Options.DefaultName, options);

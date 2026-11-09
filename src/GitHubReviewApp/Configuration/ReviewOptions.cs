@@ -10,17 +10,9 @@ public sealed class ReviewOptions
 {
     public const string SectionName = "Review";
 
-    private static readonly string[] _defaultGuidelinePaths = [".github/ai-review.md", "CLAUDE.md"];
-
     /// <summary>The values of a pull request's <c>author_association</c> that GitHub documents. Anything else in the allow list matches nobody.</summary>
     public static IReadOnlyList<string> KnownAuthorAssociations { get; } =
         ["COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "MEMBER", "NONE", "OWNER"];
-
-    /// <summary>Largest amount of rendered diff sent in one Claude request, in UTF-8 bytes.</summary>
-    public int MaxChunkBytes { get; init; } = 300_000;
-
-    /// <summary>Largest amount of rendered diff reviewed for one pull request across all requests, in UTF-8 bytes.</summary>
-    public int MaxTotalBytes { get; init; } = 1_200_000;
 
     /// <summary>A single file larger than this many UTF-8 bytes is cut at a line boundary and reported as partially reviewed.</summary>
     public int MaxFileBytes { get; init; } = 60_000;
@@ -49,12 +41,6 @@ public sealed class ReviewOptions
     /// </summary>
     public string[] HighRiskRepositories { get; init; } = [];
 
-    /// <summary>Most files reviewed for one pull request.</summary>
-    public int MaxFiles { get; init; } = 150;
-
-    /// <summary>How many Claude requests run at once for a multi-part review.</summary>
-    public int MaxParallelChunks { get; init; } = 3;
-
     /// <summary>
     /// How many Claude requests this process has in flight at once, across every review it is running. Each review runs two at once, so 12 lets
     /// the six reviews an instance takes from the queue run without waiting for one another.
@@ -69,18 +55,6 @@ public sealed class ReviewOptions
     /// sent at once, so twice that request time leaves the other half for a wait behind other reviews for a model slot.
     /// </summary>
     public int MaxReviewDurationSeconds { get; init; } = 1_200;
-
-    /// <summary>Most findings posted as inline comments; the rest are listed in the review body.</summary>
-    public int MaxInlineComments { get; init; } = 25;
-
-    /// <summary>Most findings kept in one review; lower-severity findings beyond this are counted, not listed.</summary>
-    public int MaxFindings { get; init; } = 60;
-
-    /// <summary>A pull request touching more files than this gets a suggestion to split it.</summary>
-    public int LargePullRequestFileThreshold { get; init; } = 50;
-
-    /// <summary>A pull request changing more lines than this gets a suggestion to split it.</summary>
-    public int LargePullRequestLineThreshold { get; init; } = 2000;
 
     /// <summary>
     /// When not empty, only pull requests whose author has one of these relationships to the repository (OWNER, MEMBER, COLLABORATOR...) are
@@ -98,17 +72,4 @@ public sealed class ReviewOptions
             .Select(association => association.Trim().ToUpperInvariant())
             .Distinct(StringComparer.Ordinal)
             .ToList();
-
-    /// <summary>
-    /// Repository files, in order of preference, holding review guidelines. Read from the base branch only. Null means the defaults;
-    /// set it to replace them. It has no default value of its own because the configuration binder adds configured elements to an array that
-    /// already has one, which would leave the defaults in front of an operator's own file.
-    /// </summary>
-    public string[]? GuidelinePaths { get; init; }
-
-    /// <summary>The guideline files to look for: the configured ones, or the defaults when none are configured.</summary>
-    public IReadOnlyList<string> EffectiveGuidelinePaths => GuidelinePaths ?? _defaultGuidelinePaths;
-
-    /// <summary>Guidelines longer than this are cut.</summary>
-    public int MaxGuidelinesChars { get; init; } = 20_000;
 }

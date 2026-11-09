@@ -30,7 +30,7 @@ public class AnthropicFixturesTests
     public async Task Message_GivenAReplyWithSeveralBlocks_Should_SendAPingAfterEachBlockStarts()
     {
         // Arrange
-        var response = AnthropicFixtures.Message([AnthropicFixtures.ThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson())]);
+        var response = AnthropicFixtures.Message([AnthropicFixtures.ThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson())]);
 
         // Act
         var names = await EventNamesAsync(response);

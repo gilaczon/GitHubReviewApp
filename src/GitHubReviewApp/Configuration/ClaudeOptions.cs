@@ -11,9 +11,6 @@ public sealed class ClaudeOptions
     /// <summary>The effort levels the service understands, in any letter case. Anything else is a configuration mistake.</summary>
     public static IReadOnlyList<string> KnownEfforts { get; } = ["low", "medium", "high", "xhigh", "max"];
 
-    /// <summary>Model ID sent to the API, e.g. "claude-sonnet-5-5". Change it here, not in code.</summary>
-    public string Model { get; init; } = "claude-sonnet-5-5";
-
     /// <summary>
     /// Output token cap per request. Thinking tokens count towards this limit on current models,
     /// so it must cover the reasoning as well as the review text.

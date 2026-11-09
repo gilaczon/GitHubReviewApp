@@ -8,15 +8,12 @@ public class ClaudeServiceTests
     // A call that hangs must fail the test, not hang the run.
     private static readonly TimeSpan _hangGuard = TimeSpan.FromSeconds(20);
 
-    private static readonly ClaudeReviewRequest _sampleRequest = new("SYSTEM RULES", "USER PULL REQUEST");
-
     private static readonly ClaudeRunRequest _runRequest = new("claude-sonnet-5-5", "CHECKLIST RULES", "PULL REQUEST INPUT");
 
     private sealed record CapturedRequest(JsonElement Body, string RawBody, HttpRequestMessage Message);
 
     // Retries are off so error-path tests do not wait for the SDK's backoff. The refusal fallback is on, as it ships.
     private static ClaudeOptions TestOptions(
-        string model = "claude-sonnet-5-5",
         int maxOutputTokens = 16_000,
         string? effort = "high",
         int requestTimeoutSeconds = 30,
@@ -25,7 +22,6 @@ public class ClaudeServiceTests
     {
         return new ClaudeOptions
         {
-            Model = model,
             MaxOutputTokens = maxOutputTokens,
             Effort = effort,
             RequestTimeoutSeconds = requestTimeoutSeconds,
@@ -69,22 +65,6 @@ public class ClaudeServiceTests
     }
 
     private static async Task<CapturedRequest> CaptureRequestAsync(ClaudeOptions? options = null)
-    {
-        var rawBody = string.Empty;
-        var handler = new TestHttpMessageHandler(async request =>
-        {
-            rawBody = await request.Content!.ReadAsStringAsync();
-            return AnthropicFixtures.Message();
-        });
-
-        await BuildSut(handler, options).ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        using var document = JsonDocument.Parse(rawBody);
-
-        return new CapturedRequest(document.RootElement.Clone(), rawBody, handler.LastRequest!);
-    }
-
-    private static async Task<CapturedRequest> CaptureRunRequestAsync(ClaudeOptions options)
     {
         var rawBody = string.Empty;
         var handler = new TestHttpMessageHandler(async request =>
@@ -200,33 +180,6 @@ public class ClaudeServiceTests
         captured.Body.GetProperty("stream").GetBoolean().Should().BeTrue();
     }
 
-    [Fact]
-    public async Task ReviewAsync_GivenDefaultOptions_Should_SendTheCurrentSonnetModelAndTheConfiguredOutputLimit()
-    {
-        // Arrange
-
-        // Act
-        var captured = await CaptureRequestAsync();
-
-        // Assert
-        captured.Body.GetProperty("model").GetString().Should().Be("claude-sonnet-5-5");
-        captured.Body.GetProperty("max_tokens").GetInt32().Should().Be(16_000);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAnotherModelInOptions_Should_SendThatModelWithoutACodeChange()
-    {
-        // Arrange
-        var options = TestOptions(model: "claude-opus-5-5", maxOutputTokens: 32_000);
-
-        // Act
-        var captured = await CaptureRequestAsync(options);
-
-        // Assert
-        captured.Body.GetProperty("model").GetString().Should().Be("claude-opus-5-5");
-        captured.Body.GetProperty("max_tokens").GetInt32().Should().Be(32_000);
-    }
-
     [Theory]
     [InlineData("low", "low")]
     [InlineData("medium", "medium")]
@@ -235,7 +188,7 @@ public class ClaudeServiceTests
     [InlineData("max", "max")]
     public async Task ReviewAsync_GivenAnEffortLevel_Should_SendItExplicitly(string configured, string expectedOnTheWire)
     {
-        // Arrange
+        // Arrange — the refusal fallback is on, so this is the beta request, whose effort type is its own
         var options = TestOptions(effort: configured);
 
         // Act
@@ -268,43 +221,10 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message()), TestOptions(effort: "turbo"));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*turbo*");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAnyRequest_Should_RequestStructuredOutputWithTheReviewSchema()
-    {
-        // Arrange
-
-        // Act
-        var captured = await CaptureRequestAsync();
-
-        // Assert
-        var format = captured.Body.GetProperty("output_config").GetProperty("format");
-        format.GetProperty("type").GetString().Should().Be("json_schema");
-        format.GetProperty("schema").GetProperty("required").EnumerateArray().Select(element => element.GetString())
-            .Should().BeEquivalentTo("summary", "findings", "omitted_findings");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAPrompt_Should_SendTheSystemPromptAsACacheableBlockAndThePullRequestAsTheUserMessage()
-    {
-        // Arrange
-
-        // Act
-        var captured = await CaptureRequestAsync();
-
-        // Assert
-        var system = captured.Body.GetProperty("system").EnumerateArray().Single();
-        system.GetProperty("text").GetString().Should().Be("SYSTEM RULES");
-        system.GetProperty("cache_control").GetProperty("type").GetString().Should().Be("ephemeral");
-
-        captured.Body.GetProperty("messages").GetArrayLength().Should().Be(1);
-        captured.Body.GetProperty("messages")[0].GetProperty("role").GetString().Should().Be("user");
-        UserText(captured.Body).Should().Be("USER PULL REQUEST");
     }
 
     [Theory]
@@ -324,71 +244,36 @@ public class ClaudeServiceTests
         captured.Body.TryGetProperty(property, out _).Should().BeFalse();
     }
 
-    // ── Response ─────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task ReviewAsync_GivenAStructuredReply_Should_ReturnACompletedResultWithSummaryAndFindings()
-    {
-        // Arrange
-        var reply = AnthropicFixtures.ReviewJson(
-            "Adds retries.",
-            [AnthropicFixtures.Finding(line: 42, severity: "critical", category: "security", title: "SQL injection", body: "User input is concatenated.")]);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(reply)])));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("Adds retries.");
-        result.Model.Should().Be(AnthropicFixtures.ModelId);
-        result.Findings.Should().ContainSingle().Which.Should().Be(
-            new ReviewFinding("src/Foo.cs", 42, ReviewSeverity.Critical, "security", "SQL injection", "User input is concatenated."));
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAReplyThatOmitsFindings_Should_ReturnHowManyWereLeftOut()
-    {
-        // Arrange
-        var reply = AnthropicFixtures.ReviewJson("Many problems.", [AnthropicFixtures.Finding()], omittedFindings: 7);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(reply)])));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.OmittedFindingCount.Should().Be(7);
-    }
+    // ── Answer ───────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ReviewAsync_GivenAThinkingBlockBeforeTheAnswer_Should_ReadTheTextBlockAndNotPostAnEmptyReview()
     {
         // Arrange — current models think by default; with display omitted the first block has empty text
-        var content = new[] { AnthropicFixtures.ThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson("After thinking.")) };
+        var content = new[] { AnthropicFixtures.ThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson("After thinking.")) };
         var sut = BuildSut(Respond(AnthropicFixtures.Message(content)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("After thinking.");
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("After thinking.");
     }
 
     [Fact]
     public async Task ReviewAsync_GivenARedactedThinkingBlockBeforeTheAnswer_Should_SkipItAndReadTheTextBlock()
     {
         // Arrange — when the API redacts the model's reasoning it sends opaque data and no text
-        var content = new[] { AnthropicFixtures.RedactedThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson("After redaction.")) };
+        var content = new[] { AnthropicFixtures.RedactedThinkingBlock(), AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson("After redaction.")) };
         var sut = BuildSut(Respond(AnthropicFixtures.Message(content)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("After redaction.");
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("After redaction.");
     }
 
     [Fact]
@@ -398,27 +283,42 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.RedactedThinkingBlock()])));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.InvalidOutput);
+        result.Outcome.Should().Be(RunOutcome.InvalidOutput);
+        result.Answer.Should().BeNull();
     }
 
     [Fact]
-    public async Task ReviewAsync_GivenTheAnswerSplitAcrossTextBlocks_Should_JoinThemBeforeParsing()
+    public async Task ReviewAsync_GivenNoContentAtAll_Should_ReturnInvalidOutput()
     {
         // Arrange
-        var json = AnthropicFixtures.ReviewJson("Joined summary.");
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([])));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.InvalidOutput);
+        result.Detail.Should().Be("The answer was empty.");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheAnswerSplitAcrossTextBlocks_Should_JoinThemBeforeReadingIt()
+    {
+        // Arrange
+        var json = AnthropicFixtures.ChecklistJson("Joined summary.");
         var half = json.Length / 2;
         var content = new[] { AnthropicFixtures.TextBlock(json[..half]), AnthropicFixtures.TextBlock(json[half..]) };
         var sut = BuildSut(Respond(AnthropicFixtures.Message(content)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("Joined summary.");
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("Joined summary.");
     }
 
     [Fact]
@@ -426,77 +326,63 @@ public class ClaudeServiceTests
     {
         // Arrange — the fixture streams every text block as two deltas, so this also proves they are joined without damage
         const string summary = "Añade reintentos ✓ 日本語 😀 end";
-        var reply = JsonSerializer.Serialize(new { summary, findings = Array.Empty<object>(), omitted_findings = 0 }, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(reply)])));
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson(summary))])));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be(summary);
-    }
-
-    [Theory]
-    [InlineData("max_tokens", "output limit reached")]
-    [InlineData("model_context_window_exceeded", "context window")]
-    public async Task ReviewAsync_GivenTheReplyWasCutShort_Should_ReturnOutputTruncatedInsteadOfAHalfReview(string stopReason, string expectedDetailFragment)
-    {
-        // Arrange — the text is cut mid-JSON, as it would be when the output limit or the context window runs out
-        var truncated = AnthropicFixtures.ReviewJson("Cut", [AnthropicFixtures.Finding()])[..60];
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(truncated)], stopReason: stopReason)));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.OutputTruncated);
-        result.Detail.Should().Contain(expectedDetailFragment);
-        result.Findings.Should().BeEmpty();
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be(summary);
     }
 
     [Fact]
-    public async Task ReviewAsync_GivenFindingsThatCannotBeRead_Should_ReportHowManyWereLeftOutSoTheReviewCanSayItToo()
+    public async Task ReviewAsync_GivenTextInOtherLanguagesAndCharactersJsonWritersEscape_Should_ReadItWithoutDamageEvenWhenItArrivesOneByteAtATime()
     {
-        // Arrange — one entry is not a finding at all, one is a real finding
-        const string Reply = """{"summary":"s","findings":["a string",{"path":"b.cs","line":2,"severity":"low","category":"bug","title":"real","body":""}],"omitted_findings":0}""";
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(Reply)])));
+        // Arrange — characters of two, three and four bytes, and the ones another writer would turn into escapes, with every multi-byte one split across reads
+        const string summary = "Fügt <Wiederholung> & »Zeitlimit« hinzu: 日本語のコメント 😀";
+        const string issue = "Das Ergebnis kann leer sein, wenn der Cache kalt ist: naïve café ✓";
+        var answer = AnthropicFixtures.ChecklistJson(summary, findings: [AnthropicFixtures.ChecklistFinding(issue: issue, fix: summary)]);
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)], bytesPerRead: 1)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Findings.Should().ContainSingle();
-        result.DroppedFindingCount.Should().Be(1);
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be(summary);
+        var finding = result.Answer.Findings.Should().ContainSingle().Subject;
+        finding.Issue.Should().Be(issue);
+        finding.Fix.Should().Be(summary);
     }
 
     [Fact]
-    public async Task ReviewAsync_GivenFindingsThatCannotBeRead_Should_SayHowManyWereIgnoredInTheLog()
+    public async Task ReviewAsync_GivenAStopReasonThisCodeHasNeverSeen_Should_ReadTheCompleteAnswerAnyway()
+    {
+        // Arrange — the API adds stop reasons over time; one this code does not know must not turn a good answer into a failure
+        var answer = AnthropicFixtures.ChecklistJson("Complete despite the odd reason.");
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)], stopReason: "a_future_stop_reason")));
+
+        // Act
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
+
+        // Assert
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("Complete despite the odd reason.");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenARefusalWithoutDetails_Should_StillReturnRefused()
     {
         // Arrange
-        const string Reply = """{"summary":"s","findings":["a string",{"path":"b.cs","line":2,"severity":"low","category":"bug","title":"real","body":""}],"omitted_findings":0}""";
-        var logger = new ListLogger<ClaudeService>();
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(Reply)])), logger: logger);
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([], stopReason: "refusal")));
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.StartsWith("1 malformed finding", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAReplyFromADifferentModelThanConfigured_Should_NameTheModelThatAnswered()
-    {
-        // Arrange — the review's footer credits the model that did the work, which is the one the reply names, whatever the configuration says
-        var sut = BuildSut(Respond(AnthropicFixtures.Message(model: "claude-other-model")), TestOptions(model: "claude-sonnet-5-5"));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Model.Should().Be("claude-other-model");
+        result.Outcome.Should().Be(RunOutcome.Refused);
+        result.Detail.Should().BeNull();
     }
 
     [Fact]
@@ -510,7 +396,7 @@ public class ClaudeServiceTests
             logger: logger);
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("output limit of 16000 tokens", StringComparison.Ordinal));
@@ -526,157 +412,11 @@ public class ClaudeServiceTests
             logger: logger);
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("context window", StringComparison.Ordinal));
         logger.Entries.Should().NotContain(entry => entry.Message.Contains("output limit", StringComparison.Ordinal));
-    }
-
-    [Theory]
-    [InlineData("refusal")]
-    [InlineData("max_tokens")]
-    [InlineData("model_context_window_exceeded")]
-    public async Task ReviewAsync_GivenAReplyThatCannotBeUsedAsAReview_Should_MarkTheSpanAsAnErrorSoItIsNotGreenInTheTraces(string stopReason)
-    {
-        // Arrange — a part of the review was lost, which is what an operator looks for in the traces
-        using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock("{\"summ")], stopReason: stopReason)));
-
-        // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        spans.Spans.Should().ContainSingle().Which.Status.Should().Be(ActivityStatusCode.Error);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAReplyThatIsNotAReview_Should_MarkTheSpanAsAnError()
-    {
-        // Arrange
-        using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock("I could not find a problem.")], stopReason: "end_turn")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.InvalidOutput);
-        spans.Spans.Should().ContainSingle().Which.Status.Should().Be(ActivityStatusCode.Error);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenACompleteReview_Should_NotMarkTheSpanAsAnError()
-    {
-        // Arrange
-        using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson())], stopReason: "end_turn")));
-
-        // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        spans.Spans.Should().ContainSingle().Which.Status.Should().NotBe(ActivityStatusCode.Error);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenARefusal_Should_ReturnRefusedWithTheCategory()
-    {
-        // Arrange
-        var details = new { type = "refusal", category = "cyber", explanation = "Could enable cyber harm." };
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([], stopReason: "refusal", stopDetails: details)));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Refused);
-        result.Detail.Should().Be("cyber");
-        result.Findings.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenARefusalWithoutDetails_Should_StillReturnRefused()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([], stopReason: "refusal")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Refused);
-        result.Detail.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAStopReasonThisCodeHasNeverSeen_Should_ReadTheCompleteReviewAnyway()
-    {
-        // Arrange — the API adds stop reasons over time; one this code does not know must not turn a good review into a failure
-        var reply = AnthropicFixtures.ReviewJson("Complete despite the odd reason.");
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(reply)], stopReason: "a_future_stop_reason")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("Complete despite the odd reason.");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenUnreadableJson_Should_ReturnInvalidOutputWithTheReason()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock("{ \"summary\": ")])));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.InvalidOutput);
-        result.Detail.Should().NotBeNullOrWhiteSpace();
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenNoContentAtAll_Should_ReturnInvalidOutput()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([])));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.InvalidOutput);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenAProseReply_Should_ReturnInvalidOutputSoItIsNeverPostedAsACleanReview()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock("Looks good to me overall.")])));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.InvalidOutput);
-        result.Findings.Should().BeEmpty();
-        result.Summary.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenUsageWithCacheTokens_Should_MapTokenUsageIncludingPromptCacheTokens()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Message(inputTokens: 1_000, outputTokens: 250, cacheReadTokens: 800, cacheCreationTokens: 50)));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Usage.Should().Be(new ClaudeUsage(1_000, 250, 800, 50));
     }
 
     [Fact]
@@ -686,11 +426,11 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message(inputTokens: 1_000, outputTokens: 250, isCacheUsageOmitted: true)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Usage.Should().Be(new ClaudeUsage(1_000, 250, 0, 0));
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.TotalUsage.Should().Be(new ClaudeUsage(1_000, 250, 0, 0));
     }
 
     [Fact]
@@ -701,88 +441,23 @@ public class ClaudeServiceTests
             inputTokens: 1_200, outputTokens: 300, cacheReadTokens: 800, cacheCreationTokens: 50, isUsageRestatedInFinalEvent: true)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Usage.Should().Be(new ClaudeUsage(1_200, 300, 800, 50));
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenTextInOtherLanguagesAndCharactersJsonWritersEscape_Should_ReadItWithoutDamageEvenWhenItArrivesOneByteAtATime()
-    {
-        // Arrange — characters of two, three and four bytes, and the ones another writer would turn into escapes, with every multi-byte one split across reads
-        const string title = "Fügt <Wiederholung> & »Zeitlimit« hinzu: 日本語のコメント 😀";
-        const string body = "Das Ergebnis kann leer sein, wenn der Cache kalt ist: naïve café ✓";
-        var reply = AnthropicFixtures.ReviewJson(summary: title, findings: [AnthropicFixtures.Finding(title: title, body: body)]);
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(reply)], bytesPerRead: 1)));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be(title);
-        var finding = result.Findings.Should().ContainSingle().Subject;
-        finding.Title.Should().Be(title);
-        finding.Body.Should().Be(body);
+        result.TotalUsage.Should().Be(new ClaudeUsage(1_200, 300, 800, 50));
     }
 
     // ── Requests the service refuses ─────────────────────────────────────────
 
-    [Theory]
-    [InlineData(400, "invalid_request_error")]
-    [InlineData(413, "request_too_large")]
-    [InlineData(422, "invalid_request_error")]
-    public async Task ReviewAsync_GivenTheServiceRejectsTheRequestAsInvalid_Should_ReturnRejectedInsteadOfFailingTheWholeReview(int status, string errorType)
-    {
-        // Arrange — the same request would be refused on every attempt, and the other parts of a large review are unaffected
-        var sut = BuildSut(Respond(AnthropicFixtures.Error((HttpStatusCode)status, errorType, "prompt is too long")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Rejected);
-        result.Detail.Should().Contain(status.ToString());
-        result.Findings.Should().BeEmpty();
-        result.Usage.Should().Be(ClaudeUsage.Empty);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenTheServiceRejectsTheRequest_Should_NameNoModelBecauseNothingRan()
-    {
-        // Arrange — the footer of a review credits the model named here, so a request that never ran must not name one
-        var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "prompt is too long")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Model.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenARejectionThatExplainsItself_Should_QuoteTheExplanationInTheDetail()
-    {
-        // Arrange
-        var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "prompt is too long: 212345 tokens > 200000 maximum")));
-
-        // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        result.Detail.Should().Be("HTTP 400: prompt is too long: 212345 tokens > 200000 maximum");
-    }
-
     [Fact]
     public async Task ReviewAsync_GivenAnExplanationOverThreeHundredCharacters_Should_CutItThereAndMarkTheCut()
     {
-        // Arrange — the detail goes to the logs, a span and the pull request, so a service that sends a page of text must not fill them
+        // Arrange — the detail goes to the logs and a span, so a service that sends a page of text must not fill them
         var explanation = new string('x', 300) + "TAIL";
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", explanation)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         result.Detail.Should().Be("HTTP 400: " + new string('x', 300) + "…");
@@ -796,7 +471,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", explanation)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         result.Detail.Should().Be("HTTP 400: " + explanation);
@@ -805,11 +480,11 @@ public class ClaudeServiceTests
     [Fact]
     public async Task ReviewAsync_GivenAnExplanationSpreadOverSeveralLines_Should_ReadAsOneLineWithoutTheEdgeWhitespace()
     {
-        // Arrange — a line break would split the one-line log entry and the sentence in the pull request note
+        // Arrange — a line break would split the one-line log entry
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "\r\nfirst line\r\nsecond line\nthird line\n")));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         result.Detail.Should().Be("HTTP 400: first line second line third line");
@@ -831,10 +506,10 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.ErrorWithBody(HttpStatusCode.BadRequest, body, mediaType)));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Rejected);
+        result.Outcome.Should().Be(RunOutcome.Rejected);
         result.Detail.Should().Be("HTTP 400");
     }
 
@@ -842,13 +517,13 @@ public class ClaudeServiceTests
     [InlineData(401, "authentication_error")]
     [InlineData(403, "permission_error")]
     [InlineData(404, "not_found_error")]
-    public async Task ReviewAsync_GivenACredentialOrModelProblem_Should_StillThrowBecauseNoPartOfAnyReviewCanSucceed(int status, string errorType)
+    public async Task ReviewAsync_GivenACredentialOrModelProblem_Should_StillThrowBecauseNoRunOfAnyReviewCanSucceed(int status, string errorType)
     {
         // Arrange
         var sut = BuildSut(Respond(AnthropicFixtures.Error((HttpStatusCode)status, errorType, "Check the key or the model name.")));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         (await act.Should().ThrowAsync<AnthropicApiException>()).Which.StatusCode.Should().Be((HttpStatusCode)status);
@@ -863,7 +538,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message()), apiKey: null);
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*AnthropicApiKey*");
@@ -879,7 +554,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message()), apiKey: apiKey);
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*AnthropicApiKey*");
@@ -892,15 +567,15 @@ public class ClaudeServiceTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = null }).Build();
         var sut = new ClaudeService(
             new HttpClient(Respond(AnthropicFixtures.Message())), configuration, Options.Create(TestOptions()), NullLogger<ClaudeService>.Instance);
-        var firstAttempt = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var firstAttempt = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
 
         // Act
         configuration["AnthropicApiKey"] = FakeApiKey;
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
+        result.Outcome.Should().Be(RunOutcome.Completed);
     }
 
     [Fact]
@@ -910,7 +585,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.TooManyRequests, "rate_limit_error", "Slow down.")));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<AnthropicRateLimitException>();
@@ -923,52 +598,24 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error((HttpStatusCode)529, "overloaded_error", "Overloaded")));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<Anthropic5xxException>();
     }
 
     [Fact]
-    public async Task ReviewAsync_GivenTheStreamBreaksWithAnErrorEventPartWayThrough_Should_FailWithAnErrorThatIsWorthRetrying()
-    {
-        // Arrange — the API reports an overload inside a stream that already started with a 200
-        var sut = BuildSut(Respond(AnthropicFixtures.StreamWithAnErrorEvent()));
-
-        // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        var failure = (await act.Should().ThrowAsync<Exception>()).Which;
-        FailureClassifier.IsTransient(failure).Should().BeTrue($"{failure.GetType().Name} is a dropped stream, not a fault in the request");
-    }
-
-    [Fact]
     public async Task ReviewAsync_GivenTheStreamEndsBeforeTheModelFinishes_Should_FailWithAnErrorThatIsWorthRetryingInsteadOfReadingAHalfReply()
     {
-        // Arrange — the connection closed early, so no stop reason ever arrived
+        // Arrange — the connection closed early, so no stop reason ever arrived; the fallback is on, so this is the beta stream
         var sut = BuildSut(Respond(AnthropicFixtures.StreamThatEndsBeforeTheModelFinishes()));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        var failure = (await act.Should().ThrowAsync<Exception>()).Which;
-        FailureClassifier.IsTransient(failure).Should().BeTrue($"{failure.GetType().Name} is a reply cut off in transit");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenTheStreamStopsWithoutEverReportingAStopReason_Should_FailWithAnErrorThatIsWorthRetryingEvenIfTheTextLooksComplete()
-    {
-        // Arrange — text that parses as a review is not proof the reply was whole when the model never said why it stopped
-        var sut = BuildSut(Respond(AnthropicFixtures.StreamWithoutAStopReason()));
-
-        // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        var failure = (await act.Should().ThrowAsync<Exception>()).Which;
-        FailureClassifier.IsTransient(failure).Should().BeTrue($"{failure.GetType().Name} is a reply that did not finish properly");
+        var failure = (await act.Should().ThrowAsync<IOException>()).Which;
+        FailureClassifier.IsTransient(failure).Should().BeTrue("a reply cut off in transit is worth asking for again");
     }
 
     [Fact]
@@ -980,63 +627,7 @@ public class ClaudeServiceTests
         await cancellation.CancelAsync();
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, cancellation.Token);
-
-        // Assert
-        await act.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    // ── Time limit ───────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task ReviewAsync_GivenTheReplyStallsAfterItStarts_Should_ThrowATimeoutWhenTheBudgetRunsOut()
-    {
-        // Arrange — a stream that goes quiet after its first event is the failure an HTTP timeout on the headers alone would never see
-        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var time = new FakeTimeProvider();
-        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
-
-        // Act
-        var review = sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-        await stalled.Task.WaitAsync(_hangGuard);
-        time.Advance(TimeSpan.FromSeconds(31));
-        var act = () => review.WaitAsync(_hangGuard);
-
-        // Assert — the message tells our own limit from the guard's generic one
-        (await act.Should().ThrowAsync<TimeoutException>()).Which.Message.Should().Contain("within the 30-second limit");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenTheReplyStallsButTheBudgetHasNotRunOut_Should_KeepWaiting()
-    {
-        // Arrange — the limit must be the configured one, not something shorter
-        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var time = new FakeTimeProvider();
-        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
-
-        // Act
-        var review = sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-        await stalled.Task.WaitAsync(_hangGuard);
-        time.Advance(TimeSpan.FromSeconds(29));
-        await Settle.QueuedWorkAsync();
-
-        // Assert
-        review.IsCompleted.Should().BeFalse("the budget has one second left");
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenTheCallerCancelsWhileTheReplyIsStalled_Should_ThrowCancellationNotATimeout()
-    {
-        // Arrange — a host shutdown must read as a shutdown, so the message is retried rather than reported as a model that was too slow
-        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), timeProvider: new FakeTimeProvider());
-        using var cancellation = new CancellationTokenSource();
-
-        // Act
-        var review = sut.ReviewAsync(_sampleRequest, cancellation.Token);
-        await stalled.Task.WaitAsync(_hangGuard);
-        await cancellation.CancelAsync();
-        var act = () => review.WaitAsync(_hangGuard);
+        var act = () => sut.ReviewAsync(_runRequest, cancellation.Token);
 
         // Assert
         await act.Should().ThrowAsync<OperationCanceledException>();
@@ -1049,31 +640,69 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.StreamWithAnEventThatIsNotJson()));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         var failure = (await act.Should().ThrowAsync<AnthropicInvalidDataException>()).Which;
         FailureClassifier.IsTransient(failure).Should().BeFalse();
     }
 
+    // ── Time limit ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheReplyStallsButTheBudgetHasNotRunOut_Should_KeepWaiting()
+    {
+        // Arrange — the limit must be the configured one, not something shorter
+        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var time = new FakeTimeProvider();
+        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
+
+        // Act
+        var run = sut.ReviewAsync(_runRequest, CancellationToken.None);
+        await stalled.Task.WaitAsync(_hangGuard);
+        time.Advance(TimeSpan.FromSeconds(29));
+        await Settle.QueuedWorkAsync();
+
+        // Assert
+        run.IsCompleted.Should().BeFalse("the budget has one second left");
+    }
+
+    [Fact]
+    public async Task ReviewAsync_GivenTheCallerCancelsWhileTheReplyIsStalled_Should_ThrowCancellationNotATimeout()
+    {
+        // Arrange — a host shutdown must read as a shutdown, so the message is retried rather than reported as a model that was too slow
+        var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), timeProvider: new FakeTimeProvider());
+        using var cancellation = new CancellationTokenSource();
+
+        // Act
+        var run = sut.ReviewAsync(_runRequest, cancellation.Token);
+        await stalled.Task.WaitAsync(_hangGuard);
+        await cancellation.CancelAsync();
+        var act = () => run.WaitAsync(_hangGuard);
+
+        // Assert
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     // ── Retries ──────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ReviewAsync_GivenOneRetryConfigured_Should_SendTheRequestAgainAfterAnOverloadAndReturnTheReview()
+    public async Task ReviewAsync_GivenOneRetryConfigured_Should_SendTheRequestAgainAfterAnOverloadAndReturnTheAnswer()
     {
         // Arrange
         var handler = RespondInOrder(
             AnthropicFixtures.Error((HttpStatusCode)529, "overloaded_error", "Overloaded"),
-            AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson("Second try."))]));
+            AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson("Second try."))]));
         var sut = BuildSut(handler, TestOptions(maxRetries: 1));
 
         // Act
-        var result = await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         handler.Requests.Should().HaveCount(2);
-        result.Outcome.Should().Be(ChunkOutcome.Completed);
-        result.Summary.Should().Be("Second try.");
+        result.Outcome.Should().Be(RunOutcome.Completed);
+        result.Answer!.Summary.Should().Be("Second try.");
     }
 
     [Fact]
@@ -1084,7 +713,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(handler, TestOptions(maxRetries: 0));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         await act.Should().ThrowAsync<Anthropic5xxException>();
@@ -1101,7 +730,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Message(inputTokens: 50, outputTokens: 75, stopReason: "end_turn")));
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         var span = spans.Spans.Should().ContainSingle().Subject;
@@ -1123,7 +752,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.TooManyRequests, "rate_limit_error", "Slow down.")));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
         await act.Should().ThrowAsync<AnthropicRateLimitException>();
 
         // Assert
@@ -1140,10 +769,10 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
 
         // Act
-        var review = sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var run = sut.ReviewAsync(_runRequest, CancellationToken.None);
         await stalled.Task.WaitAsync(_hangGuard);
         time.Advance(TimeSpan.FromSeconds(31));
-        var act = () => review.WaitAsync(_hangGuard);
+        var act = () => run.WaitAsync(_hangGuard);
         await act.Should().ThrowAsync<TimeoutException>();
 
         // Assert
@@ -1160,29 +789,13 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "prompt is too long")));
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
+        result.Outcome.Should().Be(RunOutcome.Rejected);
         var span = spans.Spans.Should().ContainSingle().Subject;
         span.Status.Should().Be(ActivityStatusCode.Error);
         span.GetTagItem("http.response.status_code").Should().Be(400);
-    }
-
-    [Fact]
-    public async Task ReviewAsync_GivenResponseWithUsage_Should_RecordInputOutputAndCacheTokenMetrics()
-    {
-        // Arrange
-        using var metrics = new MetricsRecorder();
-        var sut = BuildSut(Respond(AnthropicFixtures.Message(inputTokens: 50, outputTokens: 75, cacheReadTokens: 30, cacheCreationTokens: 20)));
-
-        // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
-
-        // Assert
-        metrics.Sum("gen_ai.usage.input_tokens").Should().Be(50);
-        metrics.Sum("gen_ai.usage.output_tokens").Should().Be(75);
-        metrics.Sum("gen_ai.usage.cache_read_input_tokens").Should().Be(30);
-        metrics.Sum("gen_ai.usage.cache_creation_input_tokens").Should().Be(20);
     }
 
     [Theory]
@@ -1193,10 +806,10 @@ public class ClaudeServiceTests
     {
         // Arrange
         using var metrics = new MetricsRecorder();
-        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ReviewJson())], stopReason: stopReason, outputTokens: 75)));
+        var sut = BuildSut(Respond(AnthropicFixtures.Message([AnthropicFixtures.TextBlock(AnthropicFixtures.ChecklistJson())], stopReason: stopReason, outputTokens: 75)));
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         metrics.Sum("gen_ai.usage.output_tokens", ("stop_reason", stopReason)).Should().Be(75);
@@ -1210,7 +823,7 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.Unauthorized, "authentication_error", "Bad key.")));
 
         // Act
-        var act = () => sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
         await act.Should().ThrowAsync<AnthropicApiException>();
 
         // Assert
@@ -1225,13 +838,13 @@ public class ClaudeServiceTests
         var sut = BuildSut(Respond(AnthropicFixtures.Error(HttpStatusCode.BadRequest, "invalid_request_error", "prompt is too long")));
 
         // Act
-        await sut.ReviewAsync(_sampleRequest, CancellationToken.None);
+        await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
         metrics.Measurements.Should().NotContain(measurement => measurement.Name.StartsWith("gen_ai.usage.", StringComparison.Ordinal));
     }
 
-    // ── Checklist runs ───────────────────────────────────────────────────────
+    // ── Outcomes and the refusal fallback ────────────────────────────────────
 
     [Theory]
     [InlineData(true)]
@@ -1266,11 +879,11 @@ public class ClaudeServiceTests
     [InlineData(false)]
     public async Task ReviewAsync_GivenARunRequest_Should_SendTheRequestedModelTheSchemaEffortAndACacheableSystemPrompt(bool isRefusalFallbackEnabled)
     {
-        // Arrange — the configured model belongs to the old review; a run asks for the model its request names
-        var options = TestOptions(model: "claude-opus-5-5", maxOutputTokens: 32_000, effort: "high", isRefusalFallbackEnabled: isRefusalFallbackEnabled);
+        // Arrange — a run asks for the model its request names
+        var options = TestOptions(maxOutputTokens: 32_000, effort: "high", isRefusalFallbackEnabled: isRefusalFallbackEnabled);
 
         // Act
-        var captured = await CaptureRunRequestAsync(options);
+        var captured = await CaptureRequestAsync(options);
 
         // Assert
         captured.Body.GetProperty("model").GetString().Should().Be("claude-sonnet-5-5");
@@ -1296,7 +909,7 @@ public class ClaudeServiceTests
         var options = TestOptions(isRefusalFallbackEnabled: true);
 
         // Act
-        var captured = await CaptureRunRequestAsync(options);
+        var captured = await CaptureRequestAsync(options);
 
         // Assert
         BetasSent(captured.Message).Should().Contain("server-side-fallback-2026-07-01");
@@ -1310,7 +923,7 @@ public class ClaudeServiceTests
         var options = TestOptions(isRefusalFallbackEnabled: false);
 
         // Act
-        var captured = await CaptureRunRequestAsync(options);
+        var captured = await CaptureRequestAsync(options);
 
         // Assert
         captured.Message.RequestUri!.AbsolutePath.Should().Be("/v1/messages");
@@ -1611,9 +1224,9 @@ public class ClaudeServiceTests
     [Fact]
     public async Task ReviewAsync_GivenARunAnsweredByAFallbackModel_Should_TagTheSpanWithTheRequestedAndTheAnsweringModel()
     {
-        // Arrange — the configured model belongs to the old review, so the requested model can only come from the run's request
+        // Arrange — the requested model comes from the run's request, the answering one from the reply
         using var spans = new SpanRecorder(ActivitySources.ClaudeServiceName);
-        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()), TestOptions(model: "claude-opus-5-5", maxOutputTokens: 32_000));
+        var sut = BuildSut(Respond(ReplyAnsweredAfterAFallback()), TestOptions(maxOutputTokens: 32_000));
 
         // Act
         await sut.ReviewAsync(_runRequest, CancellationToken.None);

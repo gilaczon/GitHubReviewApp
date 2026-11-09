@@ -8,15 +8,9 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
 {
     private const int MaxValueCharsShown = 100;
 
-    // The planner skips a file that would be cut to less than this, so a smaller budget would review nothing and say nothing.
-    private const int MinimumUsefulBytes = 2_000;
-
     // A cut slice under 2,000 bytes is left out as a line too long to show, which is true only when the file limit leaves room for many
     // lines. Just above 2,000, almost every file that needs a cut would be left out for that reason, though its lines are short.
     private const int MinimumFileBytes = 10_000;
-
-    // The guidelines buffer is allocated at this size for every pull request.
-    private const int MaxGuidelinesCharsCap = 200_000;
 
     // A day. Far beyond any Functions timeout, and well inside what a timer can count.
     private const int MaxReviewDurationSecondsCap = 86_400;
@@ -41,21 +35,10 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         var failures = new List<string>();
 
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.AllowedAuthorAssociations));
-        RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.GuidelinePaths));
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.HighRiskRepositories));
 
-        RequireAtLeast(failures, "MaxChunkBytes", options.MaxChunkBytes, MinimumUsefulBytes);
         RequireAtLeast(failures, "MaxFileBytes", options.MaxFileBytes, MinimumFileBytes);
-        RequireAtLeast(failures, "MaxTotalBytes", options.MaxTotalBytes, Math.Max(options.MaxChunkBytes, 1));
-        RequireAtLeast(failures, "MaxFiles", options.MaxFiles, 1);
-        RequireAtLeast(failures, "MaxParallelChunks", options.MaxParallelChunks, 1);
         RequireAtLeast(failures, "MaxConcurrentModelRequests", options.MaxConcurrentModelRequests, 1);
-        RequireAtLeast(failures, "MaxInlineComments", options.MaxInlineComments, 0);
-        RequireAtLeast(failures, "MaxFindings", options.MaxFindings, 1);
-        RequireAtLeast(failures, "LargePullRequestFileThreshold", options.LargePullRequestFileThreshold, 1);
-        RequireAtLeast(failures, "LargePullRequestLineThreshold", options.LargePullRequestLineThreshold, 1);
-        RequireAtLeast(failures, "MaxGuidelinesChars", options.MaxGuidelinesChars, 1);
-        RequireAtMost(failures, "MaxGuidelinesChars", options.MaxGuidelinesChars, MaxGuidelinesCharsCap);
         RequireAtLeast(failures, "MaxReviewDurationSeconds", options.MaxReviewDurationSeconds, 1);
         RequireAtMost(failures, "MaxReviewDurationSeconds", options.MaxReviewDurationSeconds, MaxReviewDurationSecondsCap);
         RequireAtLeast(failures, "MaxDiffBytes", options.MaxDiffBytes, 1);
@@ -95,16 +78,6 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
                 failures.Add(
                     $"Review:HighRiskRepositories has '{repository}', which is not written owner/repo, with no spaces. " +
                     "It would match no repository, so a repository that needs the stronger model would be reviewed by the other one.");
-            }
-        }
-
-        foreach (var path in options.GuidelinePaths ?? [])
-        {
-            if (!IsRepositoryRelativePath(path))
-            {
-                failures.Add(
-                    $"Review:GuidelinePaths entry '{path}' must be a path inside the repository, written with forward slashes, " +
-                    "not rooted and without '..'.");
             }
         }
 
@@ -163,13 +136,5 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
         var parts = entry.Split('/');
 
         return parts.Length == 2 && parts.All(part => part.Length > 0);
-    }
-
-    private static bool IsRepositoryRelativePath(string? path)
-    {
-        return !string.IsNullOrWhiteSpace(path)
-            && !path.StartsWith('/')
-            && !path.Contains('\\')
-            && !path.Split('/').Contains("..");
     }
 }

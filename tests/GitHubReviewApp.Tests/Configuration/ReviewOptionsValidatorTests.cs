@@ -6,29 +6,10 @@ public class ReviewOptionsValidatorTests
 
     public static IEnumerable<object[]> SettingsThatCannotWork()
     {
-        yield return [new ReviewOptions { MaxChunkBytes = 0 }, "Review:MaxChunkBytes"];
         yield return [new ReviewOptions { MaxFileBytes = 0 }, "Review:MaxFileBytes"];
-        yield return [new ReviewOptions { MaxChunkBytes = 500_000, MaxTotalBytes = 400_000 }, "Review:MaxTotalBytes"];
-        yield return [new ReviewOptions { MaxFiles = 0 }, "Review:MaxFiles"];
-        yield return [new ReviewOptions { MaxParallelChunks = 0 }, "Review:MaxParallelChunks"];
-        yield return [new ReviewOptions { MaxConcurrentModelRequests = 0 }, "Review:MaxConcurrentModelRequests"];
-        yield return [new ReviewOptions { MaxInlineComments = -1 }, "Review:MaxInlineComments"];
-        yield return [new ReviewOptions { MaxFindings = 0 }, "Review:MaxFindings"];
-        yield return [new ReviewOptions { LargePullRequestFileThreshold = 0 }, "Review:LargePullRequestFileThreshold"];
-        yield return [new ReviewOptions { LargePullRequestLineThreshold = 0 }, "Review:LargePullRequestLineThreshold"];
-        yield return [new ReviewOptions { MaxGuidelinesChars = 0 }, "Review:MaxGuidelinesChars"];
-        yield return [new ReviewOptions { AllowedAuthorAssociations = ["MEMBERS"] }, "Review:AllowedAuthorAssociations"];
-        yield return [new ReviewOptions { GuidelinePaths = [""] }, "Review:GuidelinePaths"];
-        yield return [new ReviewOptions { GuidelinePaths = ["/etc/rules.md"] }, "Review:GuidelinePaths"];
-        yield return [new ReviewOptions { GuidelinePaths = ["../outside.md"] }, "Review:GuidelinePaths"];
-        yield return [new ReviewOptions { GuidelinePaths = ["docs\\rules.md"] }, "Review:GuidelinePaths"];
-
-        // Below what the planner can use: it skips every file that would be cut to less than 2,000 bytes, so these would review nothing and say nothing
-        yield return [new ReviewOptions { MaxChunkBytes = 1_999 }, "Review:MaxChunkBytes"];
         yield return [new ReviewOptions { MaxFileBytes = 1_999 }, "Review:MaxFileBytes"];
-
-        // Too large: the guidelines buffer is allocated at this size for every pull request
-        yield return [new ReviewOptions { MaxGuidelinesChars = 200_001 }, "Review:MaxGuidelinesChars"];
+        yield return [new ReviewOptions { MaxConcurrentModelRequests = 0 }, "Review:MaxConcurrentModelRequests"];
+        yield return [new ReviewOptions { AllowedAuthorAssociations = ["MEMBERS"] }, "Review:AllowedAuthorAssociations"];
 
         yield return [new ReviewOptions { MaxReviewDurationSeconds = 0 }, "Review:MaxReviewDurationSeconds"];
         yield return [new ReviewOptions { MaxReviewDurationSeconds = 86_401 }, "Review:MaxReviewDurationSeconds"];
@@ -56,13 +37,11 @@ public class ReviewOptionsValidatorTests
         // Arrange
         var options = new ReviewOptions
         {
-            MaxChunkBytes = 2_000,
             MaxFileBytes = 10_000,
-            MaxTotalBytes = 2_000,
             MaxDiffBytes = 10_000,
             MaxListedFiles = 1,
             MaxDescriptionChars = 1,
-            MaxGuidelinesChars = 200_000,
+            MaxConcurrentModelRequests = 1,
             MaxReviewDurationSeconds = 86_400
         };
 
@@ -201,7 +180,6 @@ public class ReviewOptionsValidatorTests
 
     [Theory]
     [InlineData("AllowedAuthorAssociations", "OWNER,MEMBER")]
-    [InlineData("GuidelinePaths", "docs/a.md,docs/b.md")]
     [InlineData("HighRiskRepositories", "a/b,c/d")]
     public void Validate_GivenAListSettingWrittenAsOneValue_Should_FailBecauseTheBinderIgnoresItAndFallsBackToTheDefault(string setting, string value)
     {
@@ -266,7 +244,7 @@ public class ReviewOptionsValidatorTests
             {
                 ["Review:AllowedAuthorAssociations:0"] = "OWNER",
                 ["Review:AllowedAuthorAssociations:1"] = "MEMBER",
-                ["Review:GuidelinePaths:0"] = "docs/rules.md"
+                ["Review:HighRiskRepositories:0"] = "my-org/my-service"
             })
             .Build();
         var options = configuration.GetSection(ReviewOptions.SectionName).Get<ReviewOptions>()!;
@@ -339,26 +317,11 @@ public class ReviewOptionsValidatorTests
         result.Failures.Should().ContainSingle().Which.Should().Contain("'MEMBERS'", "the message names the value that is wrong");
     }
 
-    [Theory]
-    [InlineData(".github/ai-review.md")]
-    [InlineData("CLAUDE.md")]
-    [InlineData("docs/review rules.md")]
-    public void Validate_GivenARelativeGuidelinePath_Should_Succeed(string path)
-    {
-        // Arrange
-
-        // Act
-        var result = _sut.Validate(Options.DefaultName, new ReviewOptions { GuidelinePaths = [path] });
-
-        // Assert
-        result.Succeeded.Should().BeTrue();
-    }
-
     [Fact]
     public void Validate_GivenSeveralBadSettings_Should_ReportEveryOneSoTheyCanBeFixedInOneGo()
     {
         // Arrange
-        var options = new ReviewOptions { MaxFiles = 0, MaxFindings = 0, MaxParallelChunks = 0 };
+        var options = new ReviewOptions { MaxFileBytes = 0, MaxConcurrentModelRequests = 0, MaxListedFiles = 0 };
 
         // Act
         var result = _sut.Validate(Options.DefaultName, options);

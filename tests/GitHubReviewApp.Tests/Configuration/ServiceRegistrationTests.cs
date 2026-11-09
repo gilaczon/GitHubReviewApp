@@ -241,30 +241,17 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
-    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_BindTheModelSettingsFromTheFile()
+    public void AddReviewPipeline_GivenClaudeSettings_Should_BindThemFromConfiguration()
     {
         // Arrange
-        using var provider = BuildProvider(extra: new() { ["Claude:Model"] = "claude-from-the-file", ["Claude:MaxOutputTokens"] = "12345" });
+        using var provider = BuildProvider(extra: new() { ["Claude:MaxOutputTokens"] = "12345", ["Claude:Effort"] = "" });
 
         // Act
         var options = provider.GetRequiredService<IOptions<ClaudeOptions>>().Value;
 
-        // Assert — the value comes from configuration, not from a literal in code
-        options.Model.Should().Be("claude-from-the-file");
+        // Assert — the values come from configuration, not from literals in code
         options.MaxOutputTokens.Should().Be(12_345);
-    }
-
-    [Fact]
-    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_KeepTheDefaultGuidelinePaths()
-    {
-        // Arrange
-        using var provider = BuildProvider();
-
-        // Act
-        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
-
-        // Assert
-        options.EffectiveGuidelinePaths.Should().Equal(".github/ai-review.md", "CLAUDE.md");
+        options.Effort.Should().BeEmpty();
     }
 
     [Fact]
@@ -279,33 +266,6 @@ public class ServiceRegistrationTests
         // Assert — the repository holds the bank-login and Stripe card flows but its name says neither, so only this list sends it to Opus
         options.OpusLineThreshold.Should().Be(40);
         options.HighRiskRepositories.Should().Equal("MoneyMeTeam/Moneyme.Global.Library.VueApp");
-    }
-
-    [Fact]
-    public void AddReviewPipeline_GivenConfiguredGuidelinePaths_Should_UseExactlyThoseInsteadOfTheDefaultsPlusThem()
-    {
-        // Arrange — the binder adds configured elements to an array that already has a default, which would keep the defaults in front of an operator's own file
-        using var provider = BuildProvider(extra: new() { ["Review:GuidelinePaths:0"] = "docs/review-rules.md" });
-
-        // Act
-        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
-
-        // Assert
-        options.EffectiveGuidelinePaths.Should().Equal("docs/review-rules.md");
-    }
-
-    [Fact]
-    public void AddReviewPipeline_GivenAConfiguredModel_Should_LetOperatorsSwitchModelsWithoutACodeChange()
-    {
-        // Arrange
-        using var provider = BuildProvider(extra: new() { ["Claude:Model"] = "claude-opus-5-5", ["Claude:Effort"] = "" });
-
-        // Act
-        var options = provider.GetRequiredService<IOptions<ClaudeOptions>>().Value;
-
-        // Assert
-        options.Model.Should().Be("claude-opus-5-5");
-        options.Effort.Should().BeEmpty();
     }
 
     [Fact]
@@ -349,13 +309,13 @@ public class ServiceRegistrationTests
     public void AddReviewPipeline_GivenAnInvalidReviewSetting_Should_RefuseToHandOutTheOptions()
     {
         // Arrange
-        using var provider = BuildProvider(extra: new() { ["Review:MaxChunkBytes"] = "0" });
+        using var provider = BuildProvider(extra: new() { ["Review:MaxDiffBytes"] = "0" });
 
         // Act
         var act = () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
 
         // Assert
-        act.Should().Throw<OptionsValidationException>().WithMessage("*Review:MaxChunkBytes*");
+        act.Should().Throw<OptionsValidationException>().WithMessage("*Review:MaxDiffBytes*");
     }
 
     [Fact]
@@ -415,6 +375,28 @@ public class ServiceRegistrationTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*{name}*");
     }
 
+    [Theory]
+    [InlineData("Claude:Model", "claude-sonnet-5-5", "Model")]
+    [InlineData("Review:MaxTotalBytes", "1200000", "MaxTotalBytes")]
+    [InlineData("Review:MaxFiles", "150", "MaxFiles")]
+    [InlineData("Review:MaxParallelChunks", "3", "MaxParallelChunks")]
+    [InlineData("Review:MaxInlineComments", "25", "MaxInlineComments")]
+    [InlineData("Review:MaxFindings", "60", "MaxFindings")]
+    [InlineData("Review:LargePullRequestFileThreshold", "50", "LargePullRequestFileThreshold")]
+    [InlineData("Review:LargePullRequestLineThreshold", "2000", "LargePullRequestLineThreshold")]
+    [InlineData("Review:MaxGuidelinesChars", "20000", "MaxGuidelinesChars")]
+    public async Task AddReviewPipeline_GivenASettingTheReviewNoLongerHas_Should_FailWhenTheHostStartsNamingIt(string key, string value, string name)
+    {
+        // Arrange — a setting the review no longer reads would otherwise sit in an app's settings looking as if it still changed something
+        var settings = new Dictionary<string, string?> { [key] = value };
+
+        // Act
+        var act = () => StartHostAsync(settings);
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*{name}*");
+    }
+
     [Fact]
     public async Task AddReviewPipeline_GivenAReviewLimitShorterThanOneModelRequest_Should_FailWhenTheHostStarts()
     {
@@ -452,7 +434,6 @@ public class ServiceRegistrationTests
         var options = provider.GetRequiredService<IOptions<ClaudeOptions>>().Value;
 
         // Assert
-        options.Model.Should().StartWith("claude-");
         options.MaxOutputTokens.Should().BeGreaterThanOrEqualTo(8_000, "thinking tokens count towards the output limit");
         options.RequestTimeoutSeconds.Should().BeInRange(60, 900, "it must expire well inside the 30 minute Flex Consumption function timeout (set functionTimeout in host.json on a plan with a shorter default)");
         options.MaxRetries.Should().BeInRange(0, 5);
@@ -473,14 +454,7 @@ public class ServiceRegistrationTests
             provider.GetRequiredService<IOptions<ClaudeOptions>>().Value.RequestTimeoutSeconds,
             1_500,
             "a review is at least as long as one request and ends well inside the 30 minute Flex Consumption function timeout");
-        options.MaxFileBytes.Should().BeLessThanOrEqualTo(options.MaxChunkBytes, "a file must fit in one request");
-        options.MaxChunkBytes.Should().BeLessThanOrEqualTo(options.MaxTotalBytes);
-        options.MaxParallelChunks.Should().BeInRange(1, 16);
-        options.MaxInlineComments.Should().BeInRange(1, 100);
-        options.MaxFindings.Should().BeGreaterThanOrEqualTo(options.MaxInlineComments);
-        options.MaxFiles.Should().BeInRange(1, 3_000);
-        options.EffectiveGuidelinePaths.Should().NotBeEmpty();
-        options.MaxGuidelinesChars.Should().BeInRange(1_000, 100_000);
+        options.MaxFileBytes.Should().BeLessThanOrEqualTo(options.MaxDiffBytes, "a file cut to its limit must fit in the diff");
         options.MaxConcurrentModelRequests.Should().BeInRange(1, 64);
     }
 }

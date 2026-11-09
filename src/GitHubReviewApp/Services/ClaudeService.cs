@@ -1,11 +1,11 @@
 namespace GitHubReviewApp.Services;
 
 /// <summary>
-/// Sends review requests to Claude through the official Anthropic SDK. The model, output limit and effort come from configuration. The reply is
-/// streamed (a long review on a silent connection is what request timeouts cut off), requested as schema-constrained JSON, read by content-block
-/// type (current models may put a thinking block first), and checked for refusals and truncation. One time budget covers the whole call. A checklist
-/// run (design 5.5) asks for the model its request names and, with <see cref="ClaudeOptions.IsRefusalFallbackEnabled"/>, goes through the beta
-/// endpoint with Anthropic's server-side refusal fallback.
+/// Sends checklist runs (design 5.5) to Claude through the official Anthropic SDK. A run asks for the model its request names; the output limit and
+/// effort come from configuration. The reply is streamed (a long review on a silent connection is what request timeouts cut off), requested as
+/// schema-constrained JSON, read by content-block type (current models may put a thinking block first), and checked for refusals and truncation. One
+/// time budget covers the whole call. With <see cref="ClaudeOptions.IsRefusalFallbackEnabled"/>, a run goes through the beta endpoint with
+/// Anthropic's server-side refusal fallback.
 /// </summary>
 public class ClaudeService : IClaudeService
 {
@@ -18,9 +18,6 @@ public class ClaudeService : IClaudeService
     // included. The SDK's limit is set a little longer than the budget, so a connection that never answers at all is ended by the budget, which says
     // so, and not by the SDK's own message in a race with it.
     private static readonly TimeSpan _sdkAttemptMargin = TimeSpan.FromSeconds(15);
-
-    private static readonly IReadOnlyDictionary<string, JsonElement> _reviewSchema =
-        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(ReviewResponseSchema.Json)!;
 
     private static readonly IReadOnlyDictionary<string, JsonElement> _checklistSchema =
         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(ChecklistSchema.Json)!;
@@ -58,36 +55,6 @@ public class ClaudeService : IClaudeService
     /// (a mid-stream fallback leaves the answer split around its fallback block), the model that answered and every attempt the API made.
     /// </summary>
     private sealed record RunReply(string StopReason, string? RefusalCategory, string Text, string Model, IReadOnlyList<ModelAttempt> Attempts);
-
-    public async Task<ClaudeReviewResult> ReviewAsync(ClaudeReviewRequest request, CancellationToken cancellationToken)
-    {
-        using var activity = ActivitySources.ClaudeService.StartActivity("chat", ActivityKind.Client);
-        activity?.SetTag("gen_ai.system", "anthropic");
-        activity?.SetTag("gen_ai.operation.name", "chat");
-        activity?.SetTag("gen_ai.request.model", _options.Model);
-        activity?.SetTag("gen_ai.request.max_tokens", _options.MaxOutputTokens);
-
-        try
-        {
-            var parameters = BuildParameters(_options.Model, _reviewSchema, request.SystemPrompt, request.UserMessage);
-
-            _logger.LogInformation("Calling Claude ({Model}) for review.", _options.Model);
-            var message = await WithinBudgetAsync(
-                token => _client.Value.Messages.CreateStreaming(parameters, token).Aggregate(), cancellationToken);
-
-            return ToResult(message, activity);
-        }
-        catch (AnthropicApiException exception) when (IsRejectedAsInvalid(exception.StatusCode))
-        {
-            return ToRejectedResult(exception, activity);
-        }
-        catch (Exception exception)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
-            activity?.AddException(exception);
-            throw;
-        }
-    }
 
     public async Task<ClaudeRunResult> ReviewAsync(ClaudeRunRequest request, CancellationToken cancellationToken)
     {
@@ -202,7 +169,7 @@ public class ClaudeService : IClaudeService
             MaxTokens = _options.MaxOutputTokens,
             System = new List<AnthropicMessages.TextBlockParam>
             {
-                // Marked cacheable so repeated reviews with the same rules and guidelines read them from cache. No TTL: the default five-minute
+                // Marked cacheable so the two runs of a review, and later reviews, read the same rules from cache. No TTL: the default five-minute
                 // lifetime is the one whose write price Claude:Pricing holds.
                 new() { Text = systemPrompt, CacheControl = new AnthropicMessages.CacheControlEphemeral() }
             },
@@ -272,30 +239,20 @@ public class ClaudeService : IClaudeService
             AnthropicMessages.Effort.Medium => BetaMessages.Effort.Medium,
             AnthropicMessages.Effort.High => BetaMessages.Effort.High,
             AnthropicMessages.Effort.Xhigh => BetaMessages.Effort.Xhigh,
-            _ => BetaMessages.Effort.Max
+            AnthropicMessages.Effort.Max => BetaMessages.Effort.Max,
+
+            // ParseEffort returns only the levels above, so a level added there must be added here too, and not sent as another.
+            _ => throw new UnreachableException($"The effort level {effort} has no beta counterpart.")
         };
     }
 
     /// <summary>
     /// 400, 413 and 422 mean the request itself was refused (too large, or malformed) and would be refused again, so retrying is pointless. 401, 403
-    /// and 404 are not here: a bad key or model name fails every part of every review, which must surface as a failure, not as lost parts.
+    /// and 404 are not here: a bad key or model name fails every run of every review, which must surface as a failure, not as a rejected run.
     /// </summary>
     private static bool IsRejectedAsInvalid(HttpStatusCode statusCode)
     {
         return statusCode is HttpStatusCode.BadRequest or HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.UnprocessableEntity;
-    }
-
-    private ClaudeReviewResult ToRejectedResult(AnthropicApiException exception, Activity? activity)
-    {
-        var detail = DescribeRejection(exception);
-
-        _logger.LogWarning("The AI service rejected a review request and would reject it again ({Detail}); this part of the review is lost.", detail);
-
-        activity?.SetTag("http.response.status_code", (int)exception.StatusCode);
-        activity?.SetStatus(ActivityStatusCode.Error, detail);
-
-        // No model name: nothing ran, so the review footer must not credit one.
-        return new ClaudeReviewResult(ChunkOutcome.Rejected, string.Empty, [], string.Empty, ClaudeUsage.Empty, detail);
     }
 
     private static string DescribeRejection(AnthropicApiException exception)
@@ -340,92 +297,6 @@ public class ClaudeService : IClaudeService
             // A body that is not JSON, such as a proxy's error page, has nothing worth quoting.
             return null;
         }
-    }
-
-    private ClaudeReviewResult ToResult(AnthropicMessages.Message message, Activity? activity)
-    {
-        var stopReason = message.StopReason?.Raw();
-
-        // A reply that never reports why it stopped was cut off in transit. That is a failure to retry, not a review to read, and no tokens are
-        // counted for it because the figures it carries are not final.
-        if (stopReason is null)
-        {
-            throw new IOException("The reply from Claude ended before the model finished.");
-        }
-
-        var usage = new ClaudeUsage(
-            message.Usage.InputTokens,
-            message.Usage.OutputTokens,
-            message.Usage.CacheReadInputTokens ?? 0,
-            message.Usage.CacheCreationInputTokens ?? 0);
-
-        var model = message.Model.Raw();
-
-        RecordUsage(activity, usage, model, stopReason);
-
-        _logger.LogInformation(
-            "Claude finished a review request: stop reason {StopReason}, {InputTokens} input and {OutputTokens} output tokens.",
-            stopReason, usage.InputTokens, usage.OutputTokens);
-
-        if (stopReason == "refusal")
-        {
-            var category = message.StopDetails?.Category?.Raw();
-            _logger.LogWarning("Claude declined to review this request (category: {Category}).", category ?? "unknown");
-            activity?.SetStatus(ActivityStatusCode.Error, "refused");
-
-            return new ClaudeReviewResult(ChunkOutcome.Refused, string.Empty, [], model, usage, category);
-        }
-
-        // Read by block type: with thinking on, the first block can be a thinking block with empty text, and a redacted one has no text at all.
-        var text = string.Concat(message.Content.Select(
-            block => block.TryPickText(out AnthropicMessages.TextBlock? textBlock) ? textBlock.Text : string.Empty));
-
-        if (stopReason is "max_tokens" or "model_context_window_exceeded")
-        {
-            var isContextWindow = stopReason == "model_context_window_exceeded";
-
-            // Two different causes with two different remedies, so two different messages: raising the output limit does nothing for a request
-            // that did not fit the model's context window.
-            if (isContextWindow)
-            {
-                _logger.LogWarning("The request did not fit in the model's context window, so Claude's reply was cut short; the review is incomplete.");
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Claude's reply hit the output limit of {MaxTokens} tokens; the review is incomplete.", _options.MaxOutputTokens);
-            }
-
-            var detail = isContextWindow ? "context window exceeded" : "output limit reached";
-            activity?.SetStatus(ActivityStatusCode.Error, detail);
-
-            return new ClaudeReviewResult(ChunkOutcome.OutputTruncated, string.Empty, [], model, usage, detail);
-        }
-
-        // Any other stop reason, one this code has never seen included, is judged by what the reply holds: a complete review is a review.
-        var parsed = ReviewResponseParser.Parse(text);
-
-        if (parsed.Error is not null)
-        {
-            _logger.LogWarning("Claude's reply could not be read as a review: {Error}", parsed.Error);
-            activity?.SetStatus(ActivityStatusCode.Error, parsed.Error);
-
-            return new ClaudeReviewResult(ChunkOutcome.InvalidOutput, string.Empty, [], model, usage, parsed.Error);
-        }
-
-        if (parsed.DroppedEntryCount > 0)
-        {
-            _logger.LogWarning("{DroppedCount} malformed finding(s) in Claude's reply were ignored.", parsed.DroppedEntryCount);
-        }
-
-        return new ClaudeReviewResult(
-            ChunkOutcome.Completed,
-            parsed.Summary,
-            parsed.Findings,
-            model,
-            usage,
-            OmittedFindingCount: parsed.OmittedFindingCount,
-            DroppedFindingCount: parsed.DroppedEntryCount);
     }
 
     private static RunReply ToRunReply(AnthropicMessages.Message message)

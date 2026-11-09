@@ -13,14 +13,9 @@ internal static class RecordedGitHub
     public const string BaseSha = "abb54349981451cd344fc1dd7a4299f7bcf0152e";
     public const string Title = "Copilot - bump node types so that they are consistent with the rest of the repository";
 
-    /// <summary>The login GitHub shows on Copilot's code reviews, in the form every GitHub App's reviews have.</summary>
-    public const string CopilotReviewerLogin = "copilot-pull-request-reviewer[bot]";
-
     public static string PullRequest => Read("pull-request.json");
 
     public static string PullRequestFiles => Read("pull-request-files.json");
-
-    public static string PullRequestReviews => Read("pull-request-reviews.json");
 
     /// <summary>
     /// The recorded pull request with only its <c>state</c> changed to open. It was merged when it was recorded, and the pipeline reviews open pull

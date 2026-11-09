@@ -17,23 +17,11 @@ public class MockClaudeService : IClaudeService
         _simulatedLatency = simulatedLatency ?? _defaultLatency;
     }
 
-    public async Task<ClaudeReviewResult> ReviewAsync(ClaudeReviewRequest request, CancellationToken cancellationToken)
-    {
-        _logger.LogWarning("MockClaudeService is active — no real API call will be made.");
-
-        // Simulate network + inference latency
-        await Task.Delay(_simulatedLatency, cancellationToken);
-
-        var fileCount = Regex.Matches(request.UserMessage, "<file path=").Count;
-        var summary = $"MOCK REVIEW: this reply comes from MockClaudeService, not from Claude. The request contained {fileCount} file(s).";
-
-        return new ClaudeReviewResult(ChunkOutcome.Completed, summary, [], "mock", ClaudeUsage.Empty);
-    }
-
     public async Task<ClaudeRunResult> ReviewAsync(ClaudeRunRequest request, CancellationToken cancellationToken)
     {
         _logger.LogWarning("MockClaudeService is active — no real API call will be made.");
 
+        // Simulate network + inference latency
         await Task.Delay(_simulatedLatency, cancellationToken);
 
         // Every check passes, so a local run shows a whole comment; no model ran, so nothing was spent.

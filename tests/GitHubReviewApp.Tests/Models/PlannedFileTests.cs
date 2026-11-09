@@ -36,17 +36,4 @@ public class PlannedFileTests
         // Assert
         bytes.Should().Be(expectedBytes);
     }
-
-    [Fact]
-    public void TotalBytes_GivenAChunkOfSeveralFiles_Should_AddUpTheirUtf8Sizes()
-    {
-        // Arrange
-        var chunk = new ReviewChunk(0, [Planned("abc"), Planned("日本語")]);
-
-        // Act
-        var total = chunk.TotalBytes;
-
-        // Assert
-        total.Should().Be(3 + 9);
-    }
 }

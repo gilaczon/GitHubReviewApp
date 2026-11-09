@@ -88,22 +88,6 @@ internal static class AnthropicFixtures
         };
     }
 
-    public static string ReviewJson(string summary = "Adds retry handling.", IEnumerable<object>? findings = null, int omittedFindings = 0)
-    {
-        return JsonSerializer.Serialize(new { summary, findings = findings ?? Array.Empty<object>(), omitted_findings = omittedFindings }, _wireOptions);
-    }
-
-    public static object Finding(
-        string path = "src/Foo.cs",
-        int line = 11,
-        string severity = "high",
-        string category = "bug",
-        string title = "Null dereference",
-        string body = "The value can be null when the cache is cold.")
-    {
-        return new { path, line, severity, category, title, body };
-    }
-
     public static object TextBlock(string text)
     {
         return new { type = "text", text };
@@ -123,7 +107,8 @@ internal static class AnthropicFixtures
 
     /// <summary>
     /// A reply as a server-sent-events stream, in the order the API sends it: the start, each block's start followed by a ping, the blocks' deltas and
-    /// stops, then the final delta with the stop reason, then the stop.
+    /// stops, then the final delta with the stop reason, then the stop. Without <paramref name="content"/>, the reply is one text block holding a
+    /// checklist answer on which every check passes.
     /// </summary>
     /// <param name="isCacheUsageOmitted">Leave the prompt-cache counters out of the usage objects, as a reply with no caching does.</param>
     /// <param name="isUsageRestatedInFinalEvent">
@@ -174,7 +159,7 @@ internal static class AnthropicFixtures
 
         var index = 0;
 
-        foreach (var block in content ?? [TextBlock(ReviewJson())])
+        foreach (var block in content ?? [TextBlock(ChecklistJson())])
         {
             var blockEvents = BlockEvents(index++, JsonSerializer.SerializeToElement(block)).ToList();
 
@@ -261,7 +246,7 @@ internal static class AnthropicFixtures
     public static HttpResponseMessage StreamWithoutAStopReason()
     {
         var events = new List<string> { MessageStartEvent() };
-        events.AddRange(BlockEvents(0, JsonSerializer.SerializeToElement(TextBlock(ReviewJson("Looks complete.")))));
+        events.AddRange(BlockEvents(0, JsonSerializer.SerializeToElement(TextBlock(ChecklistJson("Looks complete.")))));
         events.Add(Event("message_stop", new { type = "message_stop" }));
 
         return Sse(string.Concat(events));

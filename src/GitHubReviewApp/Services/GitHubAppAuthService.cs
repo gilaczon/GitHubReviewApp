@@ -234,8 +234,8 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         bool hasChecksPermission,
         CancellationToken cancellationToken)
     {
-        // The review reads the pull request and its files and writes one comment (pull requests), and creates a check run (checks). It reads no
-        // repository contents, so it does not ask for them.
+        // The review reads the pull request and its files and writes one comment (pull requests), and creates a check run (checks). It asks for
+        // nothing else.
         var permissions = new Dictionary<string, string> { ["pull_requests"] = "write" };
 
         if (hasChecksPermission)

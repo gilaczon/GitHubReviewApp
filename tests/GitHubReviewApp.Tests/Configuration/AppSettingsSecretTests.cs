@@ -79,8 +79,8 @@ public class AppSettingsSecretTests
     {
         // Arrange
         const string json =
-            "{\"Claude\":{\"Model\":\"claude-sonnet-5-5\",\"MaxOutputTokens\":32000,\"Effort\":\"high\"},\"GitHubAppId\":\"3384929\"," +
-            "\"Review\":{\"MaxFiles\":150,\"GuidelinePaths\":[\".github/ai-review.md\",\"CLAUDE.md\"]}}";
+            "{\"Claude\":{\"MaxOutputTokens\":32000,\"Effort\":\"high\"},\"GitHubAppId\":\"3384929\"," +
+            "\"Review\":{\"MaxDiffBytes\":180000,\"HighRiskRepositories\":[\"MoneyMeTeam/Moneyme.Global.Library.VueApp\"]},\"Runtime\":{\"SonnetModel\":\"claude-sonnet-5-5\"}}";
 
         // Act
         var findings = SecretShapes.Find(json);
