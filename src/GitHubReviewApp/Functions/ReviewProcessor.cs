@@ -80,6 +80,11 @@ public class ReviewProcessor
                     "Review posted for {Owner}/{Repo}#{PrNumber}: {Verdict} from {RunCount} runs, {IncludedFileCount} files, partial: {IsPartial}.",
                     message.Owner, message.Repo, message.PrNumber, result.Verdict, result.RunCount, result.IncludedFileCount, result.IsPartial);
 
+                // Counts and fixed names only: the span carries nothing the model or the author wrote.
+                activity?.SetTag("review.result", ReviewRecordLog.ResultText(result.Verdict));
+                activity?.SetTag("review.runs", result.RunCount);
+                activity?.SetTag("review.files_included", result.IncludedFileCount);
+                activity?.SetTag("review.partial", result.IsPartial);
                 CountProcessed(result);
                 outcome = "posted";
             }
@@ -91,6 +96,8 @@ public class ReviewProcessor
                     "Review failed published for {Owner}/{Repo}#{PrNumber}: neither model run gave an answer.",
                     message.Owner, message.Repo, message.PrNumber);
 
+                activity?.SetTag("review.result", ReviewRecordLog.ResultText(result.Verdict));
+                activity?.SetTag("review.runs", 0);
                 CountProcessed(result);
                 outcome = "review_failed";
             }

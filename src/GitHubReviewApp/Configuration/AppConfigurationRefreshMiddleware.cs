@@ -13,10 +13,15 @@ public sealed class AppConfigurationRefreshMiddleware : IFunctionsWorkerMiddlewa
 
         if (provider is not null)
         {
-            foreach (var refresher in provider.Refreshers)
+            // Not awaited, so a refresh never delays the invocation, and started without the invocation's execution context, as the official
+            // middleware does (SuppressFlow and Task.Run): with it, the refresh's HTTP spans would parent to the host's invocation activity,
+            // which is never exported, and show as orphans. TryRefreshAsync does not throw.
+            using (ExecutionContext.SuppressFlow())
             {
-                // Not awaited, so a refresh never delays the invocation (the official middleware does the same). TryRefreshAsync does not throw.
-                _ = refresher.TryRefreshAsync();
+                foreach (var refresher in provider.Refreshers)
+                {
+                    _ = Task.Run(() => refresher.TryRefreshAsync());
+                }
             }
         }
 

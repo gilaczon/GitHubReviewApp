@@ -273,6 +273,41 @@ public class ReviewProcessorTests
     }
 
     [Fact]
+    public async Task RunAsync_GivenAPostedReview_Should_TagTheSpanWithItsResultRunsFilesAndPartialFlag()
+    {
+        // Arrange — ids and counts only, nothing the model or the author wrote
+        using var spans = new SpanRecorder(ActivitySources.ReviewProcessorName);
+        var (sut, _, _) = BuildSut(ReviewRunResult.Posted(ReviewVerdict.Fail, runCount: 1, includedFileCount: 3, isPartial: true));
+
+        // Act
+        await sut.RunAsync(_sampleMessage, CancellationToken.None);
+
+        // Assert
+        var span = spans.Spans.Should().ContainSingle().Subject;
+        span.GetTagItem("review.result").Should().Be("fail");
+        span.GetTagItem("review.runs").Should().Be(1);
+        span.GetTagItem("review.files_included").Should().Be(3);
+        span.GetTagItem("review.partial").Should().Be(true);
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenAReviewThatFailed_Should_TagTheSpanAsReviewFailedWithNoRuns()
+    {
+        // Arrange
+        using var spans = new SpanRecorder(ActivitySources.ReviewProcessorName);
+        var (sut, _, _) = BuildSut(ReviewRunResult.Failed());
+
+        // Act
+        await sut.RunAsync(_sampleMessage, CancellationToken.None);
+
+        // Assert
+        var span = spans.Spans.Should().ContainSingle().Subject;
+        span.GetTagItem("review.result").Should().Be("review_failed");
+        span.GetTagItem("review.runs").Should().Be(0);
+        span.GetTagItem("review.files_included").Should().BeNull();
+    }
+
+    [Fact]
     public async Task RunAsync_GivenValidMessage_Should_NotExportThePullRequestTitleBecauseOwnerRepoNumberAndCommitAlreadyIdentifyIt()
     {
         // Arrange — the title is the author's free text from what may be a private repository, and a span is sent to a third-party service

@@ -360,19 +360,19 @@ public class ServiceRegistrationTests
 
     [Theory]
     [InlineData("Review:AllowedAuthorAssociation:0", "OWNER", "AllowedAuthorAssociation")]
-    [InlineData("Review:MaxFile", "10", "MaxFile")]
-    [InlineData("Claude:Modell", "claude-x", "Modell")]
+    [InlineData("Review:MaxFileByte", "10000", "MaxFileByte")]
+    [InlineData("Claude:Efort", "high", "Efort")]
     public async Task AddReviewPipeline_GivenAMisspeltSettingName_Should_FailWhenTheHostStartsInsteadOfBeingIgnored(string key, string value, string name)
     {
-        // Arrange — the binder skips a key it does not know and the code default applies without a word. For the author allow-list the default is
-        // "everyone", so a missing letter in its name would open the gate.
+        // Arrange — each is a live setting with a letter missing. The binder skips a key it does not know and the code default applies without a
+        // word. For the author allow-list the default is "everyone", so a missing letter in its name would open the gate.
         var settings = new Dictionary<string, string?> { [key] = value };
 
         // Act
         var act = () => StartHostAsync(settings);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*{name}*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*not found*'{name}'*");
     }
 
     [Theory]
@@ -394,7 +394,7 @@ public class ServiceRegistrationTests
         var act = () => StartHostAsync(settings);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*{name}*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage($"*not found*'{name}'*");
     }
 
     [Fact]

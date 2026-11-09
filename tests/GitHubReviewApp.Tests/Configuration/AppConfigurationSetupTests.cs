@@ -114,6 +114,44 @@ public class AppConfigurationSetupTests
         services.BuildServiceProvider().GetRequiredService<IConfigurationRefresherProvider>().Refreshers.Should().HaveCount(1);
     }
 
+    [Fact]
+    public void AddRuntimeAppConfiguration_GivenTheManagerChainedIntoTheHostRootAsInProduction_Should_FindTheRefresherThroughTheChain()
+    {
+        // Arrange — Program.cs chains the ConfigurationManager into the host's root (configBuilder.AddConfiguration(configManager)) and the
+        // refresher provider is given that root, so it has to find the App Configuration provider through the ChainedConfigurationProvider
+        var manager = ConfigurationWithSecret(WellFormedConnectionString);
+        var services = new ServiceCollection();
+        var outcome = manager.AddRuntimeAppConfiguration(services, EnvironmentNamed("Production"));
+        var hostRoot = new ConfigurationBuilder().AddConfiguration(manager).Build();
+        services.AddSingleton<IConfiguration>(hostRoot);
+
+        // Act
+        var refreshers = services.BuildServiceProvider().GetRequiredService<IConfigurationRefresherProvider>().Refreshers;
+
+        // Assert
+        outcome.Should().Be(AppConfigurationOutcome.Added);
+        refreshers.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void AddRuntimeAppConfiguration_GivenAReloadInsideTheChainedManager_Should_ReachTheRuntimeSettingsMonitorOnTheHostRoot()
+    {
+        // Arrange — a refresh reloads the manager's own providers; the monitor listens to the host root, which has to pass the change on
+        var manager = new ConfigurationManager();
+        manager.AddInMemoryCollection(new Dictionary<string, string?> { ["Runtime:IsReviewEnabled"] = "true" });
+        var hostRoot = new ConfigurationBuilder().AddConfiguration(manager).Build();
+        using var monitor = new RuntimeSettingsMonitor(hostRoot, NullLogger<RuntimeSettingsMonitor>.Instance);
+        var isEnabledBefore = monitor.Current.IsReviewEnabled;
+        manager["Runtime:IsReviewEnabled"] = "false";
+
+        // Act
+        ((IConfigurationRoot)manager).Reload();
+
+        // Assert
+        isEnabledBefore.Should().BeTrue();
+        monitor.Current.IsReviewEnabled.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(WellFormedConnectionString, true)]
     [InlineData("Endpoint=https://store.azconfig.io;Id=test-id;Secret=dGVzdC1zZWNyZXQ=;", true)]

@@ -107,7 +107,8 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
 
         failures.Add(
             $"Review:{setting} is a list, but it is set to the single value '{shown}', which the configuration binder ignores, {outcome}. " +
-            $"Write one entry per item: a JSON array, or Review__{setting}__0, Review__{setting}__1 and so on in the app settings.");
+            $"Write one entry per item: a JSON array in appsettings.json. An indexed application setting (Review__{setting}__0, __1, ...) " +
+            "only adds entries at indexes the file does not already set, because the file is read after the application settings.");
     }
 
     private static void RequireAtLeast(List<string> failures, string setting, int value, int minimum)

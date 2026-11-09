@@ -5,6 +5,10 @@ var host = new HostBuilder()
     // App Configuration refreshes only when something asks it to; in an isolated worker, that is this middleware.
     .ConfigureFunctionsWorkerDefaults(worker => worker.UseMiddleware<AppConfigurationRefreshMiddleware>())
     .ConfigureAppConfiguration((context, configBuilder) => {
+        // The appsettings files are chained after the worker's own sources (the Function App's application settings among them) on purpose, so
+        // on a shared key the reviewed file wins: the static settings live in the file, and the settings meant to change at runtime live in App
+        // Configuration (added below). An application setting can therefore not override a key the file sets; docs/operations.md says so. Do not
+        // "fix" the order to put the environment first.
         var configManager = new ConfigurationManager();
         configManager.AddJsonFile($"appsettings.json", optional: false);
         configManager.AddJsonFile($"appsettings.{context.HostingEnvironment.EnvironmentName}.json", optional: true, reloadOnChange: false);
@@ -38,6 +42,11 @@ StartupDiagnostics.LogTelemetryState(
 StartupDiagnostics.LogRuntimeSettingsSource(
     host.Services.GetRequiredService<ILogger<Program>>(),
     appConfigurationOutcome);
+
+// The runtime settings monitor is a singleton that nothing resolves before the first invocation. Resolving it here makes an invalid Runtime value
+// (in appsettings.json, or in the store at startup) warn in the startup log, where the operations guide sends the operator, instead of at the
+// first review. It never stops the host: the monitor catches everything and keeps the last good value.
+host.Services.GetRequiredService<IRuntimeSettings>();
 
 StartupDiagnostics.LogAuthorAllowList(
     host.Services.GetRequiredService<ILogger<Program>>(),

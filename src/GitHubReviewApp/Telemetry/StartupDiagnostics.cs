@@ -58,8 +58,8 @@ internal static class StartupDiagnostics
     /// <summary>
     /// Says where the runtime settings (whether reviews are on, and the two model ids) come from. Without the App Configuration connection string,
     /// or with one that is not well formed, the values in appsettings.json are the ones in use for the life of the process. With a store, they apply
-    /// until the store has been read, which waits at most <see cref="AppConfigurationSetup.StartupTimeout"/> at startup. Neither the string nor any
-    /// value is written.
+    /// until the store has been read, which waits at most <see cref="AppConfigurationSetup.StartupTimeout"/> at startup; after that the values last
+    /// read from the store stay in use while it cannot be reached. Neither the string nor any value is written.
     /// </summary>
     internal static void LogRuntimeSettingsSource(ILogger logger, AppConfigurationOutcome outcome)
     {
@@ -67,7 +67,7 @@ internal static class StartupDiagnostics
         {
             case AppConfigurationOutcome.Added:
                 logger.LogInformation(
-                    "Azure App Configuration is on: the {Filter} keys in the store replace the Runtime values in appsettings.json once the store has been read, and a change is picked up when the {Sentinel} key changes. The startup wait for the store is at most {TimeoutSeconds} seconds; until it has been read, and while it cannot be reached, the appsettings.json values apply.",
+                    "Azure App Configuration is on: the {Filter} keys in the store replace the Runtime values in appsettings.json once the store has been read, and a change is picked up when the {Sentinel} key changes. The startup wait for the store is at most {TimeoutSeconds} seconds; until it has been read the appsettings.json values apply, and after that the values last read from the store stay in use while it cannot be reached.",
                     AppConfigurationSetup.RuntimeKeyFilter, AppConfigurationSetup.SentinelKey, AppConfigurationSetup.StartupTimeout.TotalSeconds);
                 break;
 

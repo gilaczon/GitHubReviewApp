@@ -33,7 +33,9 @@ internal static class AppMeters
     /// <summary>
     /// Reviews whose result was published. Tagged <c>result</c>: pass, pass_with_comments, fail, or review_failed (no run gave an answer, and
     /// "Review failed" was published); <c>runs</c>: the model runs that completed, 1 or 2, and 0 for review_failed; and <c>coverage</c>: full,
-    /// partial (something readable was not read) or none (no diff was sent, which an operator should treat as a failure rather than a success).
+    /// partial (something readable was not read) or none (the included count is 0: nothing readable was sent because every listed file was left
+    /// out, or the review failed). None is normal for a pull request of lockfiles, binaries, minified files, files without a patch or files whose
+    /// only lines were too long to show.
     /// </summary>
     internal static readonly Counter<long> ReviewsProcessed =
         _meter.CreateCounter<long>(
@@ -117,7 +119,7 @@ internal static class AppMeters
         _meter.CreateCounter<long>(
             "github_review_app.reviews.partial",
             unit: "reviews",
-            description: "Reviews posted without covering every changed file");
+            description: "Published reviews with a verdict in which a listed file was cut, left out over the diff budget or had no diff; files never read and files GitHub did not list are not counted");
 
     internal static readonly Counter<long> FilesReviewed =
         _meter.CreateCounter<long>(
