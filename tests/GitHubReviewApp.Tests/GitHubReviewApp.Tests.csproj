@@ -22,6 +22,12 @@
     <!-- Mocking -->
     <PackageReference Include="Moq" Version="4.20.72" />
 
+    <!-- An independent CommonMark/GFM renderer used as a test oracle for the markdown sanitizer (never referenced by production code) -->
+    <PackageReference Include="Markdig" Version="0.37.0" />
+
+    <!-- Parses the C# sources so the convention tests (SourceConventionTests) check syntax, not text (never referenced by production code) -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+
     <!-- Azure Functions Worker — needed to reference HttpRequestData / FunctionContext -->
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.0.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
@@ -29,9 +35,14 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="9.6.0" />
 
     <!-- Configuration helpers -->
-    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Real GitHub responses, recorded once. See Fixtures/GitHub/README.md for what they are and what was trimmed. -->
+    <EmbeddedResource Include="Fixtures\GitHub\*.json" />
   </ItemGroup>
 
   <ItemGroup>

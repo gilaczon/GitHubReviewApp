@@ -2,5 +2,28 @@ namespace GitHubReviewApp.Services;
 
 public interface IGitHubAppAuthService
 {
-    Task<string> GetInstallationTokenAsync(long installationId);
+    /// <summary>
+    /// Returns an installation access token limited to one repository. Scoping the token to the repository
+    /// being reviewed means a leaked token cannot touch the installation's other repositories.
+    /// </summary>
+    Task<string> GetInstallationTokenAsync(long installationId, string repository, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// False when the token cached for this repository was issued without the checks permission, because the installation was never granted it:
+    /// Checks is the only permission the token request drops. A check run is then not attempted: GitHub would refuse it, and the comment alone
+    /// still carries the result. True when no token is cached, so fetch the token first.
+    /// </summary>
+    bool CanWriteChecks(long installationId, string repository);
+
+    /// <summary>
+    /// Drops the cached token for this repository. GitHub answers 401 to a token it no longer accepts (revoked, or expired early), and the cached
+    /// copy would be handed out again until its own expiry time, failing every review of the repository the same way.
+    /// </summary>
+    void ForgetInstallationToken(long installationId, string repository);
+
+    /// <summary>
+    /// The login GitHub shows on this app's reviews and comments, "{slug}[bot]". It tells this app's own reviews apart from those
+    /// of every other account, bots included. It is looked up once and kept for the life of the process.
+    /// </summary>
+    Task<string> GetAppLoginAsync(CancellationToken cancellationToken);
 }
