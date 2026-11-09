@@ -68,6 +68,15 @@ public class AppConfigurationSetupTests
         yield return ["Endpoint=ftp://store.azconfig.io;Id=test-id;Secret=dGVzdC1zZWNyZXQ="];
         yield return ["https://store.azconfig.io"];
         yield return ["just some text"];
+
+        // Shapes the package's own parser refuses although each looks like a connection string: it matches the key names case-sensitively, does not
+        // allow a space before the equals sign, and reads a trailing slash on the endpoint as a different parse that refuses ";;" and a repeated key.
+        yield return ["endpoint=https://127.0.0.1:1;id=test-id;secret=dGVzdC1zZWNyZXQ="];
+        yield return ["ENDPOINT=https://127.0.0.1:1;ID=test-id;SECRET=dGVzdC1zZWNyZXQ="];
+        yield return ["Endpoint=https://127.0.0.1:1;id=test-id;Secret=dGVzdC1zZWNyZXQ="];
+        yield return ["Endpoint = https://127.0.0.1:1;Id=test-id;Secret=dGVzdC1zZWNyZXQ="];
+        yield return ["Endpoint=https://127.0.0.1:1/;;Id=test-id;Secret=dGVzdC1zZWNyZXQ="];
+        yield return ["Endpoint=https://127.0.0.1:1/;Id=test-id;Id=other-id;Secret=dGVzdC1zZWNyZXQ="];
     }
 
     [Theory]
@@ -107,7 +116,6 @@ public class AppConfigurationSetupTests
 
     [Theory]
     [InlineData(WellFormedConnectionString, true)]
-    [InlineData("endpoint=https://store.azconfig.io;id=test-id;secret=dGVzdC1zZWNyZXQ=", true)]
     [InlineData("Endpoint=https://store.azconfig.io;Id=test-id;Secret=dGVzdC1zZWNyZXQ=;", true)]
     [InlineData("Endpoint=http://localhost:8080;Id=test-id;Secret=dGVzdA==", true)]
     [InlineData("Endpoint=https://store.azconfig.io;Id=test-id", false)]

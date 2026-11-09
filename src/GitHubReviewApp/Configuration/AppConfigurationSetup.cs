@@ -48,18 +48,23 @@ public static class AppConfigurationSetup
             return AppConfigurationOutcome.Invalid;
         }
 
-        configuration.AddAzureAppConfiguration(
-            options =>
-            {
-                options.Connect(connectionString)
-                    .ConfigureStartupOptions(startup => startup.Timeout = StartupTimeout)
-                    .Select(RuntimeKeyFilter)
-                    .TrimKeyPrefix(KeyPrefix)
-                    .ConfigureRefresh(refresh => refresh
-                        .Register(SentinelKey, refreshAll: true)
-                        .SetRefreshInterval(RefreshInterval(environment)));
-            },
-            optional: true);
+        void ConfigureOptions(AzureAppConfigurationOptions options)
+        {
+            options.Connect(connectionString)
+                .ConfigureStartupOptions(startup => startup.Timeout = StartupTimeout)
+                .Select(RuntimeKeyFilter)
+                .TrimKeyPrefix(KeyPrefix)
+                .ConfigureRefresh(refresh => refresh
+                    .Register(SentinelKey, refreshAll: true)
+                    .SetRefreshInterval(RefreshInterval(environment)));
+        }
+
+        if (!CanBuildSource(ConfigureOptions))
+        {
+            return AppConfigurationOutcome.Invalid;
+        }
+
+        configuration.AddAzureAppConfiguration(ConfigureOptions, optional: true);
 
         // The refreshers that the Functions middleware asks to refresh.
         services.AddAzureAppConfiguration();
@@ -73,8 +78,34 @@ public static class AppConfigurationSetup
     }
 
     /// <summary>
-    /// The shape the package accepts: <c>Endpoint=</c> an absolute http or https URI, <c>Id=</c> something, and <c>Secret=</c> base64. Nothing is
-    /// ever written from the string, because it holds the store's secret.
+    /// Asks the package itself whether it accepts the connection string, which is the only check that cannot disagree with it: its parser is
+    /// case-sensitive about the key names and refuses shapes such as a space before the equals sign, <c>;;</c> and a repeated key. The source is built
+    /// on a throwaway builder, which parses the string and creates the store clients but loads nothing and makes no network call. The source is
+    /// never given to the real configuration unless it built, because a configuration manager keeps a source whose build threw.
+    /// </summary>
+    private static bool CanBuildSource(Action<AzureAppConfigurationOptions> configureOptions)
+    {
+        var probe = new ConfigurationBuilder();
+        probe.AddAzureAppConfiguration(configureOptions, optional: true);
+
+        try
+        {
+            probe.Sources[0].Build(probe);
+
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            // The package rethrows its format errors as ArgumentException, whether or not the source is optional. The message is not kept because it
+            // is the package's and the string holds the store's secret.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A cheap first check, run before the package is asked: <c>Endpoint=</c> an absolute http or https URI, <c>Id=</c> something, and <c>Secret=</c>
+    /// base64. It is looser than the package's parser (see <see cref="CanBuildSource"/>), which has the last word. Nothing is ever written from the
+    /// string, because it holds the store's secret.
     /// </summary>
     internal static bool IsWellFormedConnectionString(string connectionString)
     {
