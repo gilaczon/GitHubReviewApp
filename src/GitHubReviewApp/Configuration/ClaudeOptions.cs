@@ -25,8 +25,8 @@ public sealed class ClaudeOptions
 
     /// <summary>
     /// The whole time one request may take, retries and the streamed reply included. A request that is still running at this point is abandoned and the
-    /// message is retried. A review can run several requests one after another, so <c>Review:MaxReviewDurationSeconds</c> is what has to stay below the
-    /// Functions host timeout, and this must not exceed it.
+    /// message is retried. A review runs two requests and can wait for a free model slot first, so <c>Review:MaxReviewDurationSeconds</c> is what has
+    /// to stay below the Functions host timeout, and this must not exceed it.
     /// </summary>
     public int RequestTimeoutSeconds { get; init; } = 600;
 

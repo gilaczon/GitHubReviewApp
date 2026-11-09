@@ -105,7 +105,7 @@ public class RecordedGitHubResponseTests
             .ToList();
 
         // Assert
-        disagreements.Should().BeEmpty("a parser that miscounts real patches would anchor comments to the wrong lines");
+        disagreements.Should().BeEmpty("a parser that miscounts real patches would number the lines the model cites wrongly");
     }
 
     [Fact]

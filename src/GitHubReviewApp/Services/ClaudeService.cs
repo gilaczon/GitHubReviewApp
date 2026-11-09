@@ -74,9 +74,7 @@ public class ClaudeService : IClaudeService
                 ? ToRunReply(await WithinBudgetAsync(
                     token => _client.Value.Beta.Messages.CreateStreaming(BuildFallbackParameters(request), token).Aggregate(), cancellationToken))
                 : ToRunReply(await WithinBudgetAsync(
-                    token => _client.Value.Messages.CreateStreaming(
-                        BuildParameters(request.Model, _checklistSchema, request.SystemPrompt, request.UserMessage), token).Aggregate(),
-                    cancellationToken));
+                    token => _client.Value.Messages.CreateStreaming(BuildParameters(request), token).Aggregate(), cancellationToken));
 
             return ToRunResult(reply, activity);
         }
@@ -146,12 +144,11 @@ public class ClaudeService : IClaudeService
         };
     }
 
-    private AnthropicMessages.MessageCreateParams BuildParameters(
-        string model, IReadOnlyDictionary<string, JsonElement> schema, string systemPrompt, string userMessage)
+    private AnthropicMessages.MessageCreateParams BuildParameters(ClaudeRunRequest request)
     {
         var outputConfig = new AnthropicMessages.OutputConfig
         {
-            Format = new AnthropicMessages.JsonOutputFormat { Schema = schema }
+            Format = new AnthropicMessages.JsonOutputFormat { Schema = _checklistSchema }
         };
 
         // Only send effort when configured: older models reject the parameter, and the SDK would
@@ -165,15 +162,15 @@ public class ClaudeService : IClaudeService
         // and reject non-default sampling, disabled thinking and forced tool use.
         return new AnthropicMessages.MessageCreateParams
         {
-            Model = model,
+            Model = request.Model,
             MaxTokens = _options.MaxOutputTokens,
             System = new List<AnthropicMessages.TextBlockParam>
             {
                 // Marked cacheable so the two runs of a review, and later reviews, read the same rules from cache. No TTL: the default five-minute
                 // lifetime is the one whose write price Claude:Pricing holds.
-                new() { Text = systemPrompt, CacheControl = new AnthropicMessages.CacheControlEphemeral() }
+                new() { Text = request.SystemPrompt, CacheControl = new AnthropicMessages.CacheControlEphemeral() }
             },
-            Messages = [new AnthropicMessages.UserMessageParam { Content = userMessage }],
+            Messages = [new AnthropicMessages.UserMessageParam { Content = request.UserMessage }],
             OutputConfig = outputConfig
         };
     }
