@@ -606,7 +606,7 @@ public class ReviewOrchestratorTests
     [Theory]
     [InlineData(ReviewOrchestratorHarness.SourcePatch, false)]
     [InlineData(null, true)]
-    public async Task ReviewPullRequestAsync_GivenAFileGitHubSentNoDiffFor_Should_CountTheReviewAsPartial(string? patch, bool isPartial)
+    public async Task ReviewPullRequestAsync_GivenASecondFileWithOrWithoutAPatch_Should_BePartialOnlyWhenGitHubSentNone(string? patch, bool isPartial)
     {
         // Arrange
         var harness = new ReviewOrchestratorHarness
@@ -631,6 +631,7 @@ public class ReviewOrchestratorTests
     public async Task ReviewPullRequestAsync_GivenAHighRiskLargeChange_Should_RunBothReviewsOnOpus()
     {
         // Arrange — over 40 lines in an auth file
+        using var metrics = new MetricsRecorder();
         var harness = new ReviewOrchestratorHarness { Files = [ReviewOrchestratorHarness.ModifiedFile("src/Auth/LoginController.cs", 50)] };
         harness.PullRequest = harness.PullRequest with { ChangedFileCount = 1, Additions = 50, Deletions = 0 };
 
@@ -639,6 +640,7 @@ public class ReviewOrchestratorTests
 
         // Assert
         harness.ClaudeRequests.Select(request => request.Model).Should().Equal(OpusModel, OpusModel);
+        metrics.Sum("github_review_app.review.model_choice", ("tier", "opus"), ("reason", "high_risk")).Should().Be(1);
     }
 
     [Fact]
