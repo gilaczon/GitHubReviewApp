@@ -8,8 +8,9 @@ dotnet run --project tools/GitHubReviewApp.ReviewPreview -- https://github.com/m
 # or: dotnet run --project tools/GitHubReviewApp.ReviewPreview -- my-org/my-service#7
 ```
 
-It takes a few minutes, as a real review does, and costs what a real review costs: two model runs, on Sonnet or Opus as production would
-choose. The console shows the review record (model, tokens and cost of each run) when it finishes.
+It takes as long as a real review: the two model runs go side by side, so a small pull request is done in well under a minute and a large
+one can take several. It costs what a real review costs (two runs, on Sonnet or Opus as production would choose; a small pull request on
+Opus is about USD 0.25). The console shows the review record (model, tokens and cost of each run) when it finishes.
 
 ## What is the same as production, and what is not
 
@@ -40,8 +41,14 @@ Different, on purpose:
    read -rs SLACK_URL && dotnet user-secrets set SlackWebhookUrl "$SLACK_URL" --project tools/GitHubReviewApp.ReviewPreview; unset SLACK_URL
    ```
 
-   Each `read -rs` waits for you to paste the value and shows nothing. `dotnet user-secrets list --project tools/GitHubReviewApp.ReviewPreview`
-   prints the values, so check only that both names are there.
+   Each `read -rs` waits for you to paste the value and shows nothing. In PowerShell, copy the value and set it from the clipboard, so no
+   prompt is involved: `dotnet user-secrets set AnthropicApiKey (Get-Clipboard) --project tools/GitHubReviewApp.ReviewPreview`. (A hidden
+   prompt such as `Read-Host -MaskInput` can take Ctrl+V as a typed character instead of a paste.) Or edit the file itself:
+   `%APPDATA%\Microsoft\UserSecrets\github-review-app-review-preview\secrets.json`, a JSON object with the two names.
+
+   `dotnet user-secrets list --project tools/GitHubReviewApp.ReviewPreview` prints the values, so check only that both names are there. The
+   tool checks both before it starts: a key that does not start with `sk-ant-`, a URL that is not https, or either holding a space or a
+   control character, stops it with nothing reviewed.
 
 ## Comparing models
 
@@ -51,6 +58,7 @@ and the cost shows as unknown.
 
 ## When it fails
 
-The tool prints the reason and exits with a non-zero code; nothing is posted to Slack. `gave no token`: run `gh auth login`. A GitHub 404 on a
+The tool prints the reason and exits with a non-zero code; nothing is posted to Slack. `is not set` or `is not an ...`: set that secret
+again (setup step 3). `gave no token`: run `gh auth login`. A GitHub 404 on a
 private repository: your login cannot read it, or its SSO authorization is missing. `Slack refused the message`: the webhook was removed or
 its app uninstalled; create a new one.

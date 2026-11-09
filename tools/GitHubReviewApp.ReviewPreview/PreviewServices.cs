@@ -7,7 +7,10 @@ namespace GitHubReviewApp.ReviewPreview;
 public static class PreviewServices
 {
     /// <summary>The secrets a preview needs, by setting name. Neither is ever printed.</summary>
-    public static IReadOnlyList<string> RequiredSecretNames { get; } = ["AnthropicApiKey", SlackWebhookPoster.WebhookUrlSettingName];
+    public static IReadOnlyList<string> RequiredSecretNames { get; } = [AnthropicApiKeyName, SlackWebhookPoster.WebhookUrlSettingName];
+
+    private const string AnthropicApiKeyName = "AnthropicApiKey";
+    private const string AnthropicKeyPrefix = "sk-ant-";
 
     // The app's limit for a GitHub call (ServiceCollectionExtensions).
     private static readonly TimeSpan _gitHubRequestTimeout = TimeSpan.FromSeconds(60);
@@ -23,10 +26,40 @@ public static class PreviewServices
             .Build();
     }
 
-    /// <summary>The names in <see cref="RequiredSecretNames"/> that have no value.</summary>
-    public static IReadOnlyList<string> MissingSecrets(IConfiguration configuration)
+    /// <summary>
+    /// What is wrong with the secrets, one sentence each, or nothing. A secret that is set but plainly is not what it should be (a paste that
+    /// went wrong leaves a control character, or a stray space) is caught here, before a review is paid for. No sentence quotes a value.
+    /// </summary>
+    public static IReadOnlyList<string> SecretProblems(IConfiguration configuration)
     {
-        return RequiredSecretNames.Where(name => string.IsNullOrWhiteSpace(configuration[name])).ToList();
+        var problems = new List<string>();
+        var apiKey = configuration[AnthropicApiKeyName];
+        var webhookUrl = configuration[SlackWebhookPoster.WebhookUrlSettingName];
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            problems.Add($"{AnthropicApiKeyName} is not set.");
+        }
+        else if (!apiKey.StartsWith(AnthropicKeyPrefix, StringComparison.Ordinal) || HasSpaceOrControl(apiKey))
+        {
+            problems.Add($"{AnthropicApiKeyName} is not an Anthropic API key: it should start with {AnthropicKeyPrefix} and hold no spaces or control characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(webhookUrl))
+        {
+            problems.Add($"{SlackWebhookPoster.WebhookUrlSettingName} is not set.");
+        }
+        else if (HasSpaceOrControl(webhookUrl) || !Uri.TryCreate(webhookUrl, UriKind.Absolute, out var webhook) || webhook.Scheme != Uri.UriSchemeHttps)
+        {
+            problems.Add($"{SlackWebhookPoster.WebhookUrlSettingName} is not an https URL with no spaces or control characters, as Slack's webhook URLs are.");
+        }
+
+        return problems;
+    }
+
+    private static bool HasSpaceOrControl(string value)
+    {
+        return value.Any(character => char.IsWhiteSpace(character) || char.IsControl(character));
     }
 
     public static ServiceProvider Build(IConfiguration configuration, IGitHubTokenSource tokenSource)

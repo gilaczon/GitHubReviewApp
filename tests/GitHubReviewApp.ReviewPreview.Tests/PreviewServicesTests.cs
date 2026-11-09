@@ -50,28 +50,65 @@ public class PreviewServicesTests
     }
 
     [Fact]
-    public void MissingSecrets_GivenNeitherSecret_Should_NameBoth()
+    public void SecretProblems_GivenNeitherSecret_Should_SayBothAreNotSet()
     {
         // Arrange
         var configuration = ConfigurationWith([]);
 
         // Act
-        var missing = PreviewServices.MissingSecrets(configuration);
+        var problems = PreviewServices.SecretProblems(configuration);
 
         // Assert
-        missing.Should().Equal("AnthropicApiKey", "SlackWebhookUrl");
+        problems.Should().Equal("AnthropicApiKey is not set.", "SlackWebhookUrl is not set.");
     }
 
     [Fact]
-    public void MissingSecrets_GivenBothSecrets_Should_NameNone()
+    public void SecretProblems_GivenBothSecrets_Should_FindNone()
     {
         // Arrange
         var configuration = ConfigurationWith(BothSecrets());
 
         // Act
-        var missing = PreviewServices.MissingSecrets(configuration);
+        var problems = PreviewServices.SecretProblems(configuration);
 
         // Assert
-        missing.Should().BeEmpty();
+        problems.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("\u0016")]
+    [InlineData("anthropic-key-without-the-prefix")]
+    [InlineData("sk-ant-test with-a-space")]
+    [InlineData("sk-ant-test\u0016")]
+    public void SecretProblems_GivenAnApiKeyThatIsPlainlyWrong_Should_SayItIsNotAnAnthropicKeyWithoutQuotingIt(string apiKey)
+    {
+        // Arrange — "\u0016" is the Ctrl+V a failed paste leaves behind
+        var configuration = ConfigurationWith(new Dictionary<string, string?>(BothSecrets()) { ["AnthropicApiKey"] = apiKey });
+
+        // Act
+        var problems = PreviewServices.SecretProblems(configuration);
+
+        // Assert
+        problems.Should().ContainSingle().Which.Should().Match("AnthropicApiKey is not an Anthropic API key*sk-ant-*");
+        problems[0].Should().NotContain(apiKey);
+    }
+
+    [Theory]
+    [InlineData("\u0016")]
+    [InlineData("hooks.slack.example/services/T000/B000/no-scheme")]
+    [InlineData("http://hooks.slack.example/services/T000/B000/plain-http")]
+    [InlineData("https://hooks.slack.example/services/T000/B000/ends-with-a-space ")]
+    public void SecretProblems_GivenAWebhookUrlThatIsPlainlyWrong_Should_SayItIsNotAnHttpsUrlWithoutQuotingIt(string webhookUrl)
+    {
+        // Arrange
+        var configuration = ConfigurationWith(
+            new Dictionary<string, string?>(BothSecrets()) { [SlackWebhookPoster.WebhookUrlSettingName] = webhookUrl });
+
+        // Act
+        var problems = PreviewServices.SecretProblems(configuration);
+
+        // Assert
+        problems.Should().ContainSingle().Which.Should().Match("SlackWebhookUrl is not an https URL*");
+        problems[0].Should().NotContain("hooks.slack.example");
     }
 }

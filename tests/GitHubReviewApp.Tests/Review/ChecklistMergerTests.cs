@@ -202,15 +202,48 @@ public class ChecklistMergerTests
         merged.Findings.Should().Equal(findingA);
     }
 
-    [Theory]
-    [InlineData(CheckId.Testing, "src/Foo.cs", 12)]
-    [InlineData(CheckId.Functionality, "src/Bar.cs", 12)]
-    [InlineData(CheckId.Functionality, "src/Foo.cs", 13)]
-    public void Merge_GivenFindingsThatDifferInCheckFileOrLine_Should_KeepBoth(CheckId check, string file, int line)
+    [Fact]
+    public void Merge_GivenBothRunsFileOneLineUnderDifferentChecks_Should_KeepTheStricterRunsFindingOnly()
     {
-        // Arrange — run B's finding differs from run A's in one of the three
+        // Arrange — the same matched exception message, a design concern to run A and an error-handling concern to run B
+        var designFinding = new ChecklistFinding(
+            CheckId.StandardsDesign, "src/PayIdPaymentService.cs", 166, "Duplicate is found by matching the message.", "Throw a dedicated type.");
+        var errorHandlingFinding = new ChecklistFinding(
+            CheckId.ErrorHandling, "./src/payidpaymentservice.cs", 166, "Duplicate handling depends on the message.", "Catch a dedicated type.");
+        var runA = Run() with { Findings = [designFinding] };
+        var runB = Run() with { Findings = [errorHandlingFinding] };
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert — the stricter run's copy is kept, which on a tie is run A's
+        merged.Findings.Should().Equal(designFinding);
+    }
+
+    [Fact]
+    public void Merge_GivenOneRunFilesOneLineUnderTwoChecks_Should_KeepBoth()
+    {
+        // Arrange — within one run, two checks at one line are two problems
+        var leakedToken = new ChecklistFinding(CheckId.Security, "src/RefundClient.cs", 30, "Logs the access token.", "Log the token's id.");
+        var callPerItem = new ChecklistFinding(CheckId.Performance, "src/RefundClient.cs", 30, "Calls the API once per refund.", "Batch the calls.");
+        var runA = Run() with { Findings = [leakedToken, callPerItem] };
+        var runB = Run();
+
+        // Act
+        var merged = ChecklistMerger.Merge([runA, runB]);
+
+        // Assert
+        merged.Findings.Should().Equal(leakedToken, callPerItem);
+    }
+
+    [Theory]
+    [InlineData("src/Bar.cs", 12)]
+    [InlineData("src/Foo.cs", 13)]
+    public void Merge_GivenFindingsThatDifferInFileOrLine_Should_KeepBoth(string file, int line)
+    {
+        // Arrange — run B's finding differs from run A's in file or line
         var findingA = new ChecklistFinding(CheckId.Functionality, "src/Foo.cs", 12, "Retries the refund twice.", "Retry it once.");
-        var findingB = new ChecklistFinding(check, file, line, "Retries the refund twice.", "Retry it once.");
+        var findingB = new ChecklistFinding(CheckId.Functionality, file, line, "Retries the refund twice.", "Retry it once.");
         var runA = Run() with { Findings = [findingA] };
         var runB = Run() with { Findings = [findingB] };
 

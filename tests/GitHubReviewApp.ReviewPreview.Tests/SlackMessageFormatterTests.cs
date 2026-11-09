@@ -48,13 +48,13 @@ public class SlackMessageFormatterTests
             Reviewed twice; both reviews agreed.
 
             *Checklist (MoneyMe Code Review Checklist)*
-            - ✅ Coding standards &amp; design
-            - ⚠️ Functionality &amp; implementation: SERIOUS: Retries can post the same refund twice
+            • ✅ Coding standards &amp; design
+            • ⚠️ Functionality &amp; implementation: SERIOUS: Retries can post the same refund twice
 
             1 pass, 1 concern
 
             *To fix, worst first*
-            - ⚠️ Functionality &amp; implementation `src/RefundClient.cs:42`: The retry resends the POST. Fix: Send an idempotency key.
+            • ⚠️ Functionality &amp; implementation `src/RefundClient.cs:42`: The retry resends the POST. Fix: Send an idempotency key.
 
             my-org/my-service #7 · feature/retries → main · by dev1 · 3 files +40 -10 (2 reviewed) · claude-sonnet-5-5 at 0123456789
             """;

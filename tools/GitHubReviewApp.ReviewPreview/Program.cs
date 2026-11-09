@@ -9,11 +9,16 @@ if (args.Length != 1 || !PullRequestLink.TryParse(args[0], out var link))
 }
 
 var configuration = PreviewServices.BuildConfiguration();
-var missingSecrets = PreviewServices.MissingSecrets(configuration);
+var secretProblems = PreviewServices.SecretProblems(configuration);
 
-if (missingSecrets.Count > 0)
+if (secretProblems.Count > 0)
 {
-    Console.Error.WriteLine($"Set {string.Join(" and ", missingSecrets)} first (user secrets or environment variables): see tools/GitHubReviewApp.ReviewPreview/README.md.");
+    foreach (var problem in secretProblems)
+    {
+        Console.Error.WriteLine(problem);
+    }
+
+    Console.Error.WriteLine("Set them in user secrets or environment variables: see tools/GitHubReviewApp.ReviewPreview/README.md. Nothing was reviewed.");
     return 2;
 }
 

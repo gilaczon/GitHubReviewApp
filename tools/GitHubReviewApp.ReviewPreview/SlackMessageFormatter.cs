@@ -2,7 +2,7 @@ namespace GitHubReviewApp.ReviewPreview;
 
 /// <summary>
 /// Turns the review comment, written for GitHub, into a Slack message. Slack's mrkdwn is not GitHub markdown: the headline and the two section
-/// headings are made bold, the hidden record marker is dropped, GitHub's backslash escapes and HTML entities outside code are undone, and
+/// headings are made bold, list items get a bullet (Slack shows a leading "- " as typed), the hidden record marker is dropped, GitHub's backslash escapes and HTML entities outside code are undone, and
 /// <c>&amp;</c>, <c>&lt;</c> and <c>&gt;</c> are escaped as Slack requires, which also stops text from the pull request forming a Slack link or
 /// mention. Inline code stays inline code.
 /// </summary>
@@ -14,6 +14,8 @@ public static class SlackMessageFormatter
     private const string RecordMarkerStart = "<!-- moneyme-ai-review";
     private const string ChecklistHeadingStart = "Checklist (";
     private const string FindingsHeading = "To fix, worst first";
+    private const string ListItemStart = "- ";
+    private const string Bullet = "• ";
     private const string CutNote = "\n… (cut here: the review is longer than one Slack message can hold)";
 
     // The ASCII punctuation CommonMark lets a backslash escape.
@@ -35,6 +37,12 @@ public static class SlackMessageFormatter
         for (var index = 0; index < lines.Count; index++)
         {
             var text = ToSlack(lines[index]);
+
+            if (text.StartsWith(ListItemStart, StringComparison.Ordinal))
+            {
+                text = Bullet + text[ListItemStart.Length..];
+            }
+
             var isHeading = index == 0 || lines[index] == FindingsHeading || lines[index].StartsWith(ChecklistHeadingStart, StringComparison.Ordinal);
 
             builder.Append('\n').Append(isHeading && text.Length > 0 ? $"*{text}*" : text);
