@@ -45,7 +45,7 @@ public class RecordedGitHubResponseTests
     }
 
     [Fact]
-    public async Task GetPullRequestAsync_GivenTheRecordedResponse_Should_ReadTheAuthorAndBranches()
+    public async Task GetPullRequestAsync_GivenTheRecordedResponse_Should_ReadTheBranchesAndEmptyTextForWhatTheRecordingLeftOut()
     {
         // Arrange
 

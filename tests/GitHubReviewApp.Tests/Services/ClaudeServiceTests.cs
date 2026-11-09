@@ -181,15 +181,20 @@ public class ClaudeServiceTests
     }
 
     [Theory]
-    [InlineData("low", "low")]
-    [InlineData("medium", "medium")]
-    [InlineData("HIGH", "high")]
-    [InlineData("xhigh", "xhigh")]
-    [InlineData("max", "max")]
-    public async Task ReviewAsync_GivenAnEffortLevel_Should_SendItExplicitly(string configured, string expectedOnTheWire)
+    [InlineData("low", "low", true)]
+    [InlineData("medium", "medium", true)]
+    [InlineData("HIGH", "high", true)]
+    [InlineData("xhigh", "xhigh", true)]
+    [InlineData("max", "max", true)]
+    [InlineData("low", "low", false)]
+    [InlineData("medium", "medium", false)]
+    [InlineData("HIGH", "high", false)]
+    [InlineData("xhigh", "xhigh", false)]
+    [InlineData("max", "max", false)]
+    public async Task ReviewAsync_GivenAnEffortLevel_Should_SendItExplicitly(string configured, string expectedOnTheWire, bool isRefusalFallbackEnabled)
     {
-        // Arrange — the refusal fallback is on, so this is the beta request, whose effort type is its own
-        var options = TestOptions(effort: configured);
+        // Arrange — with the refusal fallback on this is the beta request, whose effort type is its own; off, it is the standard request
+        var options = TestOptions(effort: configured, isRefusalFallbackEnabled: isRefusalFallbackEnabled);
 
         // Act
         var captured = await CaptureRequestAsync(options);
@@ -199,13 +204,16 @@ public class ClaudeServiceTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task ReviewAsync_GivenNoEffortConfigured_Should_OmitTheParameterForModelsThatRejectIt(string? configured)
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("   ", true)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    public async Task ReviewAsync_GivenNoEffortConfigured_Should_OmitTheParameterForModelsThatRejectIt(string? configured, bool isRefusalFallbackEnabled)
     {
-        // Arrange
-        var options = TestOptions(effort: configured);
+        // Arrange — on the beta request and on the standard one alike
+        var options = TestOptions(effort: configured, isRefusalFallbackEnabled: isRefusalFallbackEnabled);
 
         // Act
         var captured = await CaptureRequestAsync(options);
@@ -652,19 +660,25 @@ public class ClaudeServiceTests
     [Fact]
     public async Task ReviewAsync_GivenTheReplyStallsButTheBudgetHasNotRunOut_Should_KeepWaiting()
     {
-        // Arrange — the limit must be the configured one, not something shorter
+        // Arrange — the limit must be the configured one, not something shorter. The stalled call is cancelled at the end so it does not run on
+        // into the rest of the suite until the SDK's real-clock timeout faults it.
         var stalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var time = new FakeTimeProvider();
         var sut = BuildSut(Respond(AnthropicFixtures.StreamThatStallsAfterItsFirstEvent(stalled)), TestOptions(requestTimeoutSeconds: 30), timeProvider: time);
+        using var cancellation = new CancellationTokenSource();
 
         // Act
-        var run = sut.ReviewAsync(_runRequest, CancellationToken.None);
+        var run = sut.ReviewAsync(_runRequest, cancellation.Token);
         await stalled.Task.WaitAsync(_hangGuard);
         time.Advance(TimeSpan.FromSeconds(29));
         await Settle.QueuedWorkAsync();
+        var isCompletedWithOneSecondLeft = run.IsCompleted;
+        await cancellation.CancelAsync();
+        var act = () => run.WaitAsync(_hangGuard);
 
         // Assert
-        run.IsCompleted.Should().BeFalse("the budget has one second left");
+        isCompletedWithOneSecondLeft.Should().BeFalse("the budget has one second left");
+        await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -912,6 +926,10 @@ public class ClaudeServiceTests
         var captured = await CaptureRequestAsync(options);
 
         // Assert
+        // The SDK sends the beta request to the same path as the standard one, with no query: the beta is named in the header alone.
+        var requestUri = captured.Message.RequestUri!;
+        requestUri.AbsolutePath.Should().Be("/v1/messages");
+        requestUri.Query.Should().BeEmpty();
         BetasSent(captured.Message).Should().Contain("server-side-fallback-2026-07-01");
         captured.Body.GetProperty("fallbacks").GetString().Should().Be("default");
     }
