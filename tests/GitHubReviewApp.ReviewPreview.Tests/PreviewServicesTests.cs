@@ -14,7 +14,7 @@ public class PreviewServicesTests
     {
         return new Dictionary<string, string?>
         {
-            ["AnthropicApiKey"] = "sk-ant-test",
+            ["GitHubReviewAppAnthropicApiKey"] = "sk-ant-test",
             [SlackWebhookPoster.WebhookUrlSettingName] = "https://hooks.slack.example/services/T000/B000/not-a-real-secret"
         };
     }
@@ -59,7 +59,7 @@ public class PreviewServicesTests
         var problems = PreviewServices.SecretProblems(configuration);
 
         // Assert
-        problems.Should().Equal("AnthropicApiKey is not set.", "SlackWebhookUrl is not set.");
+        problems.Should().Equal("GitHubReviewAppAnthropicApiKey is not set.", "SlackWebhookUrl is not set.");
     }
 
     [Fact]
@@ -83,13 +83,13 @@ public class PreviewServicesTests
     public void SecretProblems_GivenAnApiKeyThatIsPlainlyWrong_Should_SayItIsNotAnAnthropicKeyWithoutQuotingIt(string apiKey)
     {
         // Arrange — "\u0016" is the Ctrl+V a failed paste leaves behind
-        var configuration = ConfigurationWith(new Dictionary<string, string?>(BothSecrets()) { ["AnthropicApiKey"] = apiKey });
+        var configuration = ConfigurationWith(new Dictionary<string, string?>(BothSecrets()) { ["GitHubReviewAppAnthropicApiKey"] = apiKey });
 
         // Act
         var problems = PreviewServices.SecretProblems(configuration);
 
         // Assert
-        problems.Should().ContainSingle().Which.Should().Match("AnthropicApiKey is not an Anthropic API key*sk-ant-*");
+        problems.Should().ContainSingle().Which.Should().Match("GitHubReviewAppAnthropicApiKey is not an Anthropic API key*sk-ant-*");
         problems[0].Should().NotContain(apiKey);
     }
 

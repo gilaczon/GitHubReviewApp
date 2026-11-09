@@ -63,15 +63,15 @@ public class AppSettingsSecretTests
     public void Find_GivenASettingNamedForASecret_Should_FlagItByNameWhateverItsValueLooksLike()
     {
         // Arrange
-        const string json = "{\"Section\":{\"GitHubWebhookSecret\":\"plain-text\",\"Nested\":{\"AnthropicApiKey\":\"x\"}}}";
+        const string json = "{\"Section\":{\"GitHubReviewAppWebhookSecret\":\"plain-text\",\"Nested\":{\"GitHubReviewAppAnthropicApiKey\":\"x\"}}}";
 
         // Act
         var findings = SecretShapes.Find(json);
 
         // Assert
         findings.Should().HaveCount(2);
-        findings.Should().Contain(finding => finding.StartsWith("Section:GitHubWebhookSecret:", StringComparison.Ordinal));
-        findings.Should().Contain(finding => finding.StartsWith("Section:Nested:AnthropicApiKey:", StringComparison.Ordinal));
+        findings.Should().Contain(finding => finding.StartsWith("Section:GitHubReviewAppWebhookSecret:", StringComparison.Ordinal));
+        findings.Should().Contain(finding => finding.StartsWith("Section:Nested:GitHubReviewAppAnthropicApiKey:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class AppSettingsSecretTests
     public void Find_GivenASecretNamedSettingWithNoValue_Should_NotFlagThePlaceholder()
     {
         // Arrange — an empty entry is how a file says "supply this from Key Vault"
-        const string json = "{\"UptraceDsn\":\"\",\"GitHubWebhookSecret\":\"   \"}";
+        const string json = "{\"UptraceDsn\":\"\",\"GitHubReviewAppWebhookSecret\":\"   \"}";
 
         // Act
         var findings = SecretShapes.Find(json);

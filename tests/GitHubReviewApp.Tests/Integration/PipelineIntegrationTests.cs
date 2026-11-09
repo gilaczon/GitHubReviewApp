@@ -21,9 +21,9 @@ public class PipelineIntegrationTests
         var values = new Dictionary<string, string?>
         {
             ["GitHubAppId"] = FakeBackend.AppId,
-            ["GitHubAppPrivateKey"] = RsaKeyHelper.PrivateKeyPem,
-            ["AnthropicApiKey"] = FakeBackend.AnthropicKey,
-            ["GitHubWebhookSecret"] = "integration-webhook-secret",
+            ["GitHubReviewAppPrivateKey"] = RsaKeyHelper.PrivateKeyPem,
+            ["GitHubReviewAppAnthropicApiKey"] = FakeBackend.AnthropicKey,
+            ["GitHubReviewAppWebhookSecret"] = "integration-webhook-secret",
             ["Claude:MaxRetries"] = "0"   // no backoff delays in failure tests
         };
 
@@ -420,7 +420,7 @@ public class PipelineIntegrationTests
     {
         // Arrange
         var backend = new FakeBackend();
-        using var provider = BuildProvider(backend, new() { ["AnthropicApiKey"] = null });
+        using var provider = BuildProvider(backend, new() { ["GitHubReviewAppAnthropicApiKey"] = null });
 
         // Act
         await RunProcessorAsync(provider);

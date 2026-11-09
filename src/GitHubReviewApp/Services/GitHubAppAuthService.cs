@@ -9,7 +9,7 @@ public class GitHubAppAuthService : IGitHubAppAuthService
     private const string ApiBaseUrl = "https://api.github.com";
 
     // Key Vault secret name for the GitHub App RSA private key (PEM format)
-    private const string PrivateKeySecretName = "GitHubAppPrivateKey";
+    private const string PrivateKeySecretName = "GitHubReviewAppPrivateKey";
 
     // Above this many cached tokens, expired ones are dropped so the cache cannot grow without bound.
     private const int MaxCachedTokens = 128;

@@ -540,7 +540,7 @@ public class GitHubAppAuthServiceTests
         var act = () => sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubAppPrivateKey*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppPrivateKey*");
     }
 
     // ── JWT structure verification ───────────────────────────────────────────
@@ -773,7 +773,7 @@ public class GitHubAppAuthServiceTests
         var settings = new Dictionary<string, string?>
         {
             ["GitHubAppId"]         = appId,
-            ["GitHubAppPrivateKey"] = privateKey == "default" ? RsaKeyHelper.PrivateKeyPem : privateKey
+            ["GitHubReviewAppPrivateKey"] = privateKey == "default" ? RsaKeyHelper.PrivateKeyPem : privateKey
         };
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();

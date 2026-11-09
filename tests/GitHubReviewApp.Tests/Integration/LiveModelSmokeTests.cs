@@ -24,7 +24,7 @@ public class LiveModelSmokeTests
     {
         // Arrange — the system prompt, the checklist schema and a review input built as the app builds them, sent to Sonnet with the fallback on
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = Environment.GetEnvironmentVariable(LiveFactAttribute.KeyVariable) })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubReviewAppAnthropicApiKey"] = Environment.GetEnvironmentVariable(LiveFactAttribute.KeyVariable) })
             .Build();
         var options = new ClaudeOptions { RequestTimeoutSeconds = 300, MaxRetries = 1, IsRefusalFallbackEnabled = true };
         var sut = new ClaudeService(new HttpClient(), configuration, Options.Create(options), NullLogger<ClaudeService>.Instance);

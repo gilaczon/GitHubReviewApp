@@ -12,7 +12,7 @@ public class WebhookReceiver
     /// <summary>The size of one read from the body, which is also the most that a read can go past <see cref="MaxBodyBytes"/> before it stops.</summary>
     internal const int ReadBufferBytes = 81_920;
 
-    private const string WebhookSecretName = "GitHubWebhookSecret";
+    private const string WebhookSecretName = "GitHubReviewAppWebhookSecret";
 
     // Actions after which the pull request's reviewable content may have changed. A draft that is marked
     // ready, and a pull request that is reopened, have nothing new to push, so they need their own entries.

@@ -33,7 +33,7 @@ public class ClaudeServiceTests
     private static IConfiguration BuildConfiguration(string? apiKey)
     {
         return new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = apiKey })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubReviewAppAnthropicApiKey"] = apiKey })
             .Build();
     }
 
@@ -549,7 +549,7 @@ public class ClaudeServiceTests
         var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*AnthropicApiKey*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppAnthropicApiKey*");
     }
 
     [Theory]
@@ -565,21 +565,21 @@ public class ClaudeServiceTests
         var act = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*AnthropicApiKey*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppAnthropicApiKey*");
     }
 
     [Fact]
     public async Task ReviewAsync_GivenTheApiKeyAppearsAfterAFailedAttempt_Should_UseItOnTheNextCallWithoutARestart()
     {
         // Arrange — a failed creation of the client is not remembered, so fixing the secret takes effect at once
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = null }).Build();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubReviewAppAnthropicApiKey"] = null }).Build();
         var sut = new ClaudeService(
             new HttpClient(Respond(AnthropicFixtures.Message())), configuration, Options.Create(TestOptions()), NullLogger<ClaudeService>.Instance);
         var firstAttempt = () => sut.ReviewAsync(_runRequest, CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
 
         // Act
-        configuration["AnthropicApiKey"] = FakeApiKey;
+        configuration["GitHubReviewAppAnthropicApiKey"] = FakeApiKey;
         var result = await sut.ReviewAsync(_runRequest, CancellationToken.None);
 
         // Assert
