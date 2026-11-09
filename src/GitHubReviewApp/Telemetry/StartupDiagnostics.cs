@@ -54,4 +54,23 @@ internal static class StartupDiagnostics
             "Set the UptraceDsn secret in Key Vault.",
             environment.EnvironmentName);
     }
+
+    /// <summary>
+    /// Says where the runtime settings (whether reviews are on, and the two model ids) come from. Without the App Configuration connection string
+    /// the values in appsettings.json are the ones in use for the life of the process. Neither the string nor any value is written.
+    /// </summary>
+    internal static void LogRuntimeSettingsSource(ILogger logger, bool isAppConfigurationAdded)
+    {
+        if (isAppConfigurationAdded)
+        {
+            logger.LogInformation(
+                "Azure App Configuration is on: the {Filter} keys in the store override the Runtime values in appsettings.json, and a change is picked up when the {Sentinel} key changes.",
+                AppConfigurationSetup.RuntimeKeyFilter, AppConfigurationSetup.SentinelKey);
+            return;
+        }
+
+        logger.LogInformation(
+            "No {SecretName} is set, so Azure App Configuration is not used and the Runtime values in appsettings.json apply.",
+            AppConfigurationSetup.ConnectionStringSecretName);
+    }
 }

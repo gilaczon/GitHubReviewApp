@@ -26,6 +26,9 @@ internal static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<ClaudeOptions>, ClaudeOptionsValidator>();
         services.AddSingleton<IValidateOptions<ReviewOptions>, ReviewOptionsValidator>();
 
+        // The settings an operator can change while the app runs. One holder, so that every review reads the snapshot that a reload publishes.
+        services.AddSingleton<IRuntimeSettings, RuntimeSettingsMonitor>();
+
         services.AddSingleton<IGitHubAppAuthService, GitHubAppAuthService>();
 
         // Typed HTTP clients registered against interfaces

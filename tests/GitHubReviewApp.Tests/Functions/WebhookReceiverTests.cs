@@ -653,6 +653,52 @@ public class WebhookReceiverTests
         StatusOf(result).Should().Be(HttpStatusCode.Accepted);
     }
 
+    // ── The on/off switch ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOff_Should_AnswerOkAndQueueNothing()
+    {
+        // Arrange
+        var request = BuildSignedPullRequestRequest(BuildPullRequestPayload("opened", isDraft: false));
+
+        // Act
+        var result = await BuildSut(isReviewEnabled: false).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
+        ((FakeHttpResponseData)result.HttpResponse).ReadBodyText().Should().Be("Ignored: reviews are switched off.");
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOffAndABadSignature_Should_StillAnswerUnauthorized()
+    {
+        // Arrange — the switch is looked at only after the caller has proved who it is
+        var body = BuildPullRequestPayload("opened", isDraft: false);
+        var request = BuildRequest(body,
+            ("X-GitHub-Event", "pull_request"),
+            ("X-Hub-Signature-256", ComputeSignature(body, "some-other-secret")));
+
+        // Act
+        var result = await BuildSut(isReviewEnabled: false).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOffAndAnActionThatNeedsNoReview_Should_GiveTheActionsOwnAnswer()
+    {
+        // Arrange
+        var request = BuildSignedPullRequestRequest(BuildPullRequestPayload("closed", isDraft: false));
+
+        // Act
+        var result = await BuildSut(isReviewEnabled: false).RunAsync(request);
+
+        // Assert
+        ((FakeHttpResponseData)result.HttpResponse).ReadBodyText().Should().Contain("needs no review");
+    }
+
     // ── Factory helpers ──────────────────────────────────────────────────────
 
     private static HttpStatusCode StatusOf(WebhookOutput output)
@@ -660,7 +706,19 @@ public class WebhookReceiverTests
         return output.HttpResponse.StatusCode;
     }
 
-    private static WebhookReceiver BuildSut(IConfiguration? config = null, ReviewOptions? options = null, ILogger<WebhookReceiver>? logger = null)
+    private static IRuntimeSettings RuntimeSettingsWith(bool isReviewEnabled)
+    {
+        var runtime = new Mock<IRuntimeSettings>();
+        runtime.Setup(r => r.Current).Returns(RuntimeSettings.Default with { IsReviewEnabled = isReviewEnabled });
+
+        return runtime.Object;
+    }
+
+    private static WebhookReceiver BuildSut(
+        IConfiguration? config = null,
+        ReviewOptions? options = null,
+        ILogger<WebhookReceiver>? logger = null,
+        bool isReviewEnabled = true)
     {
         config ??= new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -669,7 +727,11 @@ public class WebhookReceiverTests
             })
             .Build();
 
-        return new WebhookReceiver(config, Options.Create(options ?? new ReviewOptions()), logger ?? NullLogger<WebhookReceiver>.Instance);
+        return new WebhookReceiver(
+            config,
+            Options.Create(options ?? new ReviewOptions()),
+            RuntimeSettingsWith(isReviewEnabled),
+            logger ?? NullLogger<WebhookReceiver>.Instance);
     }
 
     private static FakeHttpRequestData BuildRequest(

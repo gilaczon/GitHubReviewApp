@@ -5,6 +5,7 @@ public class ReviewProcessor
     private readonly IReviewOrchestrator _orchestrator;
     private readonly IReviewFailureNotifier _notifier;
     private readonly IGitHubAppAuthService _auth;
+    private readonly IRuntimeSettings _runtime;
     private readonly ILogger<ReviewProcessor> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -12,12 +13,14 @@ public class ReviewProcessor
         IReviewOrchestrator orchestrator,
         IReviewFailureNotifier notifier,
         IGitHubAppAuthService auth,
+        IRuntimeSettings runtime,
         ILogger<ReviewProcessor> logger,
         TimeProvider? timeProvider = null)
     {
         _orchestrator = orchestrator;
         _notifier = notifier;
         _auth = auth;
+        _runtime = runtime;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -54,6 +57,19 @@ public class ReviewProcessor
         var startedAt = _timeProvider.GetTimestamp();
         try
         {
+            // Checked again here: the switch may have been turned off while the message waited in the queue.
+            if (!_runtime.Current.IsReviewEnabled)
+            {
+                _logger.LogInformation(
+                    "Skipping review of {Owner}/{Repo}#{PrNumber}: reviews are switched off.",
+                    message.Owner, message.Repo, message.PrNumber);
+
+                activity?.SetTag("review.skipped_reason", ReviewSkipReason.SwitchedOff.ToString());
+                activity?.SetStatus(ActivityStatusCode.Ok);
+                outcome = "skipped";
+                return;
+            }
+
             var result = await _orchestrator.ReviewPullRequestAsync(message, cancellationToken);
 
             if (result.Status == ReviewRunStatus.Posted)

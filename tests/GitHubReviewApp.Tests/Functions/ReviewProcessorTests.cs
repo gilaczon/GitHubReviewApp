@@ -16,7 +16,8 @@ public class ReviewProcessorTests
         ReviewRunResult? result = null,
         Mock<IGitHubAppAuthService>? auth = null,
         ILogger<ReviewProcessor>? logger = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        bool isReviewEnabled = true)
     {
         var orchestrator = new Mock<IReviewOrchestrator>();
         orchestrator
@@ -28,8 +29,16 @@ public class ReviewProcessorTests
             .Setup(n => n.NotifyFailureAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        var runtime = new Mock<IRuntimeSettings>();
+        runtime.Setup(r => r.Current).Returns(RuntimeSettings.Default with { IsReviewEnabled = isReviewEnabled });
+
         var sut = new ReviewProcessor(
-            orchestrator.Object, notifier.Object, (auth ?? new Mock<IGitHubAppAuthService>()).Object, logger ?? NullLogger<ReviewProcessor>.Instance, timeProvider);
+            orchestrator.Object,
+            notifier.Object,
+            (auth ?? new Mock<IGitHubAppAuthService>()).Object,
+            runtime.Object,
+            logger ?? NullLogger<ReviewProcessor>.Instance,
+            timeProvider);
         return (sut, orchestrator, notifier);
     }
 
@@ -117,6 +126,28 @@ public class ReviewProcessorTests
         span.GetTagItem("review.skipped_reason").Should().Be("Draft");
         span.Status.Should().Be(ActivityStatusCode.Ok);
         notifier.Verify(n => n.NotifyFailureAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never());
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOff_Should_SkipWithoutCallingTheOrchestrator()
+    {
+        // Arrange
+        using var metrics = new MetricsRecorder();
+        using var spans = new SpanRecorder(ActivitySources.ReviewProcessorName);
+        var (sut, orchestrator, notifier) = BuildSut(isReviewEnabled: false);
+
+        // Act
+        await sut.RunAsync(_sampleMessage, CancellationToken.None);
+
+        // Assert
+        orchestrator.Verify(o => o.ReviewPullRequestAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<CancellationToken>()), Times.Never());
+        notifier.Verify(n => n.NotifyFailureAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never());
+        var span = spans.Spans.Should().ContainSingle().Subject;
+        span.GetTagItem("review.skipped_reason").Should().Be("SwitchedOff");
+        span.Status.Should().Be(ActivityStatusCode.Ok);
+        metrics.Sum("github_review_app.reviews.processed").Should().Be(0);
+        metrics.Sum("github_review_app.reviews.failed").Should().Be(0);
+        metrics.Has("github_review_app.review.duration", ("outcome", "skipped")).Should().BeTrue();
     }
 
     [Fact]

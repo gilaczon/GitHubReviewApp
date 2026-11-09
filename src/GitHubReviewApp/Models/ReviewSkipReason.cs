@@ -16,5 +16,8 @@ public enum ReviewSkipReason
     NothingToReview = 4,
 
     /// <summary>This process is already reviewing this exact commit; that run posts the review.</summary>
-    InProgress = 5
+    InProgress = 5,
+
+    /// <summary>Reviews are switched off in the runtime settings (design 5.11), so nothing was reviewed.</summary>
+    SwitchedOff = 6
 }

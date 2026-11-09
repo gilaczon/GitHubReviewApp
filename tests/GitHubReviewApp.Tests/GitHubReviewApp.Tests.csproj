@@ -35,9 +35,9 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="9.6.0" />
 
     <!-- Configuration helpers -->
-    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup>

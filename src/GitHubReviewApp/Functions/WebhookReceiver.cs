@@ -25,12 +25,14 @@ public class WebhookReceiver
 
     private readonly IConfiguration _config;
     private readonly ReviewOptions _options;
+    private readonly IRuntimeSettings _runtime;
     private readonly ILogger<WebhookReceiver> _logger;
 
-    public WebhookReceiver(IConfiguration config, IOptions<ReviewOptions> options, ILogger<WebhookReceiver> logger)
+    public WebhookReceiver(IConfiguration config, IOptions<ReviewOptions> options, IRuntimeSettings runtime, ILogger<WebhookReceiver> logger)
     {
         _config = config;
         _options = options.Value;
+        _runtime = runtime;
         _logger = logger;
     }
 
@@ -113,6 +115,14 @@ public class WebhookReceiver
         {
             _logger.LogInformation("Skipping draft PR action={Action}.", payload.Action);
             return Respond(req, HttpStatusCode.OK, "Ignored: draft pull request.");
+        }
+
+        // The operator's switch (design 5.11). It is read after the signature and the filters, so a forged request still gets 401 and the
+        // answers that mean "needs no review" stay as they are; what is left is a review that would have been queued.
+        if (!_runtime.Current.IsReviewEnabled)
+        {
+            _logger.LogInformation("Ignored a review request: reviews are switched off.");
+            return Respond(req, HttpStatusCode.OK, "Ignored: reviews are switched off.");
         }
 
         // 6. A message the processor cannot act on must not be queued.

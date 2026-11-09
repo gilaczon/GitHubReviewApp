@@ -133,4 +133,34 @@ public class StartupDiagnosticsTests
         // Assert
         logger.Entries.Should().ContainSingle().Which.Level.Should().Be(LogLevel.Warning);
     }
+
+    [Fact]
+    public void LogRuntimeSettingsSource_GivenNoAppConfiguration_Should_SayTheAppSettingsValuesApply()
+    {
+        // Arrange
+        var logger = new ListLogger<StartupDiagnosticsTests>();
+
+        // Act
+        StartupDiagnostics.LogRuntimeSettingsSource(logger, isAppConfigurationAdded: false);
+
+        // Assert
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Information);
+        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("appsettings");
+    }
+
+    [Fact]
+    public void LogRuntimeSettingsSource_GivenAppConfiguration_Should_SayTheStoreOverridesTheAppSettingsValues()
+    {
+        // Arrange
+        var logger = new ListLogger<StartupDiagnosticsTests>();
+
+        // Act
+        StartupDiagnostics.LogRuntimeSettingsSource(logger, isAppConfigurationAdded: true);
+
+        // Assert
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Information);
+        entry.Message.Should().Contain("App Configuration").And.Contain("GitHubReviewApp:Runtime");
+    }
 }

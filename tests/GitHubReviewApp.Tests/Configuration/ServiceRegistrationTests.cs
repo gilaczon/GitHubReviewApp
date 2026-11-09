@@ -187,6 +187,36 @@ public class ServiceRegistrationTests
         client.Timeout.Should().Be(TimeSpan.FromSeconds(60));
     }
 
+    [Fact]
+    public void AddReviewPipeline_GivenTheServices_Should_RegisterOneRuntimeSettingsMonitor()
+    {
+        // Arrange
+        using var provider = BuildProvider();
+
+        // Act
+        var first = provider.GetRequiredService<IRuntimeSettings>();
+        var second = provider.GetRequiredService<IRuntimeSettings>();
+
+        // Assert
+        first.Should().BeOfType<RuntimeSettingsMonitor>();
+        first.Should().BeSameAs(second, "the snapshot a reload publishes must be the one every review reads");
+    }
+
+    [Fact]
+    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_GiveTheRuntimeDefaults()
+    {
+        // Arrange — the Runtime section of appsettings.json is what applies without App Configuration, and it must not drift from the code's defaults
+        using var provider = BuildProvider();
+
+        // Act
+        var current = provider.GetRequiredService<IRuntimeSettings>().Current;
+
+        // Assert
+        current.Should().Be(RuntimeSettings.Default);
+        provider.GetRequiredService<IConfiguration>().GetSection("Runtime").GetChildren().Select(child => child.Key)
+            .Should().BeEquivalentTo("IsReviewEnabled", "SonnetModel", "OpusModel");
+    }
+
     // ── Settings binding ─────────────────────────────────────────────────────
 
     private static IEnumerable<string> UnknownKeys(IConfigurationSection section, Type optionsType)
