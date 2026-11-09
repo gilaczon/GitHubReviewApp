@@ -19,6 +19,11 @@ public class ReviewOptionsValidatorTests
 
         yield return [new ReviewOptions { OpusLineThreshold = -1 }, "Review:OpusLineThreshold"];
 
+        // Never matched: a branch name holds no space, so a blank entry or one with a space inside reviews nothing it was meant to
+        yield return [new ReviewOptions { TargetBranches = [""] }, "Review:TargetBranches"];
+        yield return [new ReviewOptions { TargetBranches = ["  "] }, "Review:TargetBranches"];
+        yield return [new ReviewOptions { TargetBranches = ["main master"] }, "Review:TargetBranches"];
+
         // Never matched: an entry is an owner and a repository, so a blank or half-written one would leave a risky repository on Sonnet
         yield return [new ReviewOptions { HighRiskRepositories = [""] }, "Review:HighRiskRepositories"];
         yield return [new ReviewOptions { HighRiskRepositories = ["  "] }, "Review:HighRiskRepositories"];
@@ -53,13 +58,14 @@ public class ReviewOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_GivenAZeroThresholdAndWellFormedHighRiskRepositories_Should_Succeed()
+    public void Validate_GivenAZeroThresholdAndWellFormedListEntries_Should_Succeed()
     {
         // Arrange — a threshold of zero sends every change that touches a risky area to Opus
         var options = new ReviewOptions
         {
             OpusLineThreshold = 0,
-            HighRiskRepositories = ["MoneyMeTeam/Moneyme.Global.Library.VueApp", "my-org/my-service"]
+            HighRiskRepositories = ["MoneyMeTeam/Moneyme.Global.Library.VueApp", "my-org/my-service"],
+            TargetBranches = ["main", " qa ", "release/2026.11"]
         };
 
         // Act
@@ -181,6 +187,7 @@ public class ReviewOptionsValidatorTests
     [Theory]
     [InlineData("AllowedAuthorAssociations", "OWNER,MEMBER")]
     [InlineData("HighRiskRepositories", "a/b,c/d")]
+    [InlineData("TargetBranches", "main,qa")]
     public void Validate_GivenAListSettingWrittenAsOneValue_Should_FailBecauseTheBinderIgnoresItAndFallsBackToTheDefault(string setting, string value)
     {
         // Arrange — "Review__AllowedAuthorAssociations=OWNER,MEMBER" binds to nothing, which leaves the list empty and lets every author trigger a review

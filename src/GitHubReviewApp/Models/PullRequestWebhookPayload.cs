@@ -17,4 +17,8 @@ public class PullRequestWebhookPayload
 
     [JsonPropertyName("installation")]
     public Installation? Installation { get; init; }
+
+    /// <summary>Present on an <c>edited</c> event: what the edit changed.</summary>
+    [JsonPropertyName("changes")]
+    public PullRequestChanges? Changes { get; init; }
 }

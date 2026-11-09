@@ -14,6 +14,10 @@ public class WebhookReceiver
 
     private const string WebhookSecretName = "GitHubReviewAppWebhookSecret";
 
+    // An edit is reviewed only when it retargets the pull request: one moved onto a reviewed branch would otherwise wait for its next push.
+    // A title or description edit is not, so fixing a typo does not pay for a review.
+    private const string EditedAction = "edited";
+
     // Actions after which the pull request's reviewable content may have changed. A draft that is marked
     // ready, and a pull request that is reopened, have nothing new to push, so they need their own entries.
     private static readonly HashSet<string> _reviewableActions = new(StringComparer.Ordinal)
@@ -105,7 +109,7 @@ public class WebhookReceiver
         }
 
         // 5. Filter to actions that need a review; skip drafts.
-        if (payload.Action is null || !_reviewableActions.Contains(payload.Action))
+        if (!NeedsReview(payload))
         {
             _logger.LogInformation("Skipping PR action={Action}.", payload.Action);
             return Respond(req, HttpStatusCode.OK, $"Ignored: action '{payload.Action}' needs no review.");
@@ -124,6 +128,14 @@ public class WebhookReceiver
         {
             _logger.LogWarning("Webhook payload for action={Action} is missing required fields.", payload.Action);
             return Respond(req, HttpStatusCode.BadRequest, "Payload is missing required fields.");
+        }
+
+        if (!IsTargetBranchReviewed(payload.PullRequest?.Base?.Ref))
+        {
+            _logger.LogInformation(
+                "Skipping {Owner}/{Repo}#{PrNumber}: it targets a branch that is not reviewed.",
+                message.Owner, message.Repo, message.PrNumber);
+            return Respond(req, HttpStatusCode.OK, "Ignored: the pull request targets a branch that is not reviewed.");
         }
 
         if (!IsAuthorAllowed(payload.PullRequest?.AuthorAssociation))
@@ -219,6 +231,25 @@ public class WebhookReceiver
         return hasEverythingAReviewNeeds
             ? new ReviewQueueMessage(owner, repo, pullRequest.Number, pullRequest.Title ?? string.Empty, pullRequest.Base?.Sha ?? string.Empty, headSha, installation.Id)
             : null;
+    }
+
+    private static bool NeedsReview(PullRequestWebhookPayload payload)
+    {
+        return payload.Action is { } action
+            && (_reviewableActions.Contains(action) || (action == EditedAction && payload.Changes?.HasBaseChanged == true));
+    }
+
+    private bool IsTargetBranchReviewed(string? baseBranch)
+    {
+        var branches = _options.EffectiveTargetBranches;
+
+        if (branches.Count == 0)
+        {
+            return true;
+        }
+
+        // With a list set, a payload that does not name the base branch cannot be shown to target one on it.
+        return baseBranch is not null && branches.Contains(baseBranch.Trim(), StringComparer.OrdinalIgnoreCase);
     }
 
     private bool IsAuthorAllowed(string? authorAssociation)
