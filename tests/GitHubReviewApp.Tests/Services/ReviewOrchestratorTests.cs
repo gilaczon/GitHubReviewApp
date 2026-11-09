@@ -26,6 +26,20 @@ public class ReviewOrchestratorTests
         yield return [new HttpRequestException("The AI service is unavailable.")];
     }
 
+    /// <summary>
+    /// A second changed file beside <c>src/Foo.cs</c>, the diff budget, and whether the review is partial: read whole; sent no diff by GitHub; cut,
+    /// with 3,000 lines of about 22 bytes against the 60,000-byte file limit; or left out over a 1,000-byte budget with 100 lines.
+    /// </summary>
+    public static IEnumerable<object[]> SecondFilesAndWhetherTheReviewIsPartial()
+    {
+        const int defaultMaxDiffBytes = 180_000;
+
+        yield return [new PullRequestFile("src/Bar.cs", "modified", 1, 0, ReviewOrchestratorHarness.SourcePatch), defaultMaxDiffBytes, false];
+        yield return [new PullRequestFile("src/Bar.cs", "modified", 1, 0, null), defaultMaxDiffBytes, true];
+        yield return [ReviewOrchestratorHarness.ModifiedFile("src/Bar.cs", 3_000), defaultMaxDiffBytes, true];
+        yield return [ReviewOrchestratorHarness.ModifiedFile("src/Bar.cs", 100), 1_000, true];
+    }
+
     private static Task<ClaudeRunResult> Answer(object ending)
     {
         return ending switch
@@ -134,6 +148,40 @@ public class ReviewOrchestratorTests
         harness.ClaudeRequests.Should().HaveCount(2);
         harness.ClaudeRequests[1].Should().Be(harness.ClaudeRequests[0]);
         harness.ClaudeRequests[0].Should().Be(RequestFor(harness));
+    }
+
+    [Fact]
+    public async Task ReviewPullRequestAsync_GivenOneFreeModelSlot_Should_WaitForItAndThenRunTheTwoRunsOneAtATime()
+    {
+        // Arrange — the test holds the process's only slot, and the first run holds the slot until the test lets it finish. Each run takes a slot
+        // of its own, so the second run cannot start while the first one works.
+        var harness = new ReviewOrchestratorHarness { Options = new ReviewOptions { MaxConcurrentModelRequests = 1 } };
+        var firstRunStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstRunMayFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.ClaudeHandler = async (index, _, cancellationToken) =>
+        {
+            firstRunStarted.TrySetResult();
+            await (index == 0 ? firstRunMayFinish.Task : Task.CompletedTask).WaitAsync(cancellationToken);
+
+            return ReviewOrchestratorHarness.Completed();
+        };
+        var heldSlot = await harness.Limiter.AcquireAsync(CancellationToken.None);
+
+        // Act
+        var run = harness.RunAsync().WaitAsync(_hangGuard);
+        await Settle.QueuedWorkAsync();
+        var requestsWhileTheSlotWasHeld = harness.ClaudeRequests.Count;
+        heldSlot.Dispose();
+        await firstRunStarted.Task.WaitAsync(_hangGuard);
+        await Settle.QueuedWorkAsync();
+        var requestsWhileTheFirstRunWorked = harness.ClaudeRequests.Count;
+        firstRunMayFinish.SetResult();
+        var result = await run;
+
+        // Assert
+        requestsWhileTheSlotWasHeld.Should().Be(0, "no run starts without a slot of its own");
+        requestsWhileTheFirstRunWorked.Should().Be(1, "the second run waits for the slot the first run holds");
+        result.RunCount.Should().Be(2);
     }
 
     [Fact]
@@ -604,18 +652,16 @@ public class ReviewOrchestratorTests
     }
 
     [Theory]
-    [InlineData(ReviewOrchestratorHarness.SourcePatch, false)]
-    [InlineData(null, true)]
-    public async Task ReviewPullRequestAsync_GivenASecondFileWithOrWithoutAPatch_Should_BePartialOnlyWhenGitHubSentNone(string? patch, bool isPartial)
+    [MemberData(nameof(SecondFilesAndWhetherTheReviewIsPartial))]
+    public async Task ReviewPullRequestAsync_GivenASecondFileThatWasReadWholeCutLeftOutOrSentNoDiff_Should_BePartialUnlessItWasReadWhole(
+        PullRequestFile secondFile, int maxDiffBytes, bool isPartial)
     {
         // Arrange
+        using var metrics = new MetricsRecorder();
         var harness = new ReviewOrchestratorHarness
         {
-            Files =
-            [
-                new PullRequestFile("src/Foo.cs", "modified", 1, 0, ReviewOrchestratorHarness.SourcePatch),
-                new PullRequestFile("src/Bar.cs", "modified", 1, 0, patch)
-            ]
+            Options = new ReviewOptions { MaxDiffBytes = maxDiffBytes },
+            Files = [new PullRequestFile("src/Foo.cs", "modified", 1, 0, ReviewOrchestratorHarness.SourcePatch), secondFile]
         };
 
         // Act
@@ -623,6 +669,32 @@ public class ReviewOrchestratorTests
 
         // Assert
         result.IsPartial.Should().Be(isPartial);
+        metrics.Has("github_review_app.reviews.partial").Should().Be(isPartial);
+    }
+
+    // ── The installation token ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task ReviewPullRequestAsync_GivenTheModelTookMinutes_Should_UseAFreshTokenForEveryCallAfterIt()
+    {
+        // Arrange — the token fetched at the start could expire while the model works, so it is fetched again before anything after the model
+        const string freshToken = "ghs_fetched_after_the_model";
+        const string firstToken = ReviewOrchestratorHarness.Token;
+        var harness = new ReviewOrchestratorHarness { TokenAfterModel = freshToken };
+
+        // Act
+        await harness.RunAsync();
+
+        // Assert
+        harness.ClaudeRequests.Should().HaveCount(2);
+        harness.UsedTokens.Should().Equal(
+            ("pull-request", firstToken),
+            ("comments", firstToken),
+            ("files", firstToken),
+            ("pull-request", freshToken),
+            ("comments", freshToken),
+            ("check-run", freshToken),
+            ("comment:create", freshToken));
     }
 
     // ── The model ────────────────────────────────────────────────────────────
@@ -720,9 +792,10 @@ public class ReviewOrchestratorTests
     }
 
     [Fact]
-    public async Task ReviewPullRequestAsync_GivenAFinishedReview_Should_CountTheModelChoiceCheckStatusesSeriousFlagsAndCost()
+    public async Task ReviewPullRequestAsync_GivenAFinishedReview_Should_CountTheModelChoiceCheckStatusesSeriousFlagsCostAndCoverage()
     {
-        // Arrange — each run used 1,000 input and 500 output tokens at Sonnet's $2 and $10 per million: $0.007, twice
+        // Arrange — each run used 1,000 input and 500 output tokens at Sonnet's $2 and $10 per million: $0.007, twice. One file of the pull
+        // request's +10 -2 is reviewed; the other is a lockfile, never read, so the review is not partial.
         using var metrics = new MetricsRecorder();
         var harness = new ReviewOrchestratorHarness
         {
@@ -740,6 +813,9 @@ public class ReviewOrchestratorTests
         metrics.Sum("github_review_app.review.serious").Should().Be(1);
         metrics.Sum("github_review_app.review.cost", ("tier", "sonnet")).Should().Be(0.014);
         metrics.Sum("github_review_app.review.disagreements").Should().Be(0);
+        metrics.Sum("github_review_app.files.reviewed").Should().Be(1);
+        metrics.Sum("github_review_app.pull_request.changed_lines").Should().Be(12);
+        metrics.Has("github_review_app.reviews.partial").Should().BeFalse();
     }
 
     [Fact]

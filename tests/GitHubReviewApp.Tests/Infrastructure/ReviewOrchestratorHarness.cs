@@ -31,6 +31,7 @@ internal sealed class ReviewOrchestratorHarness
     private readonly List<(int PrNumber, string Body)> _createdComments = [];
     private readonly List<(long Id, string Body)> _updatedComments = [];
     private readonly List<ClaudeRunRequest> _claudeRequests = [];
+    private readonly List<(string Operation, string Token)> _usedTokens = [];
     private ModelRequestLimiter? _limiter;
     private int _pullRequestCalls;
     private int _tokenCalls;
@@ -46,7 +47,7 @@ internal sealed class ReviewOrchestratorHarness
             .ReturnsAsync(() =>
             {
                 Interlocked.Increment(ref _tokenCalls);
-                return Token;
+                return Volatile.Read(ref _claudeCalls) == 0 ? Token : TokenAfterModel ?? Token;
             });
 
         Auth.Setup(a => a.GetAppLoginAsync(It.IsAny<CancellationToken>()))
@@ -58,38 +59,46 @@ internal sealed class ReviewOrchestratorHarness
 
         Runtime.Setup(r => r.Current).Returns(() => RuntimeSettings);
 
-        GitHub.Setup(g => g.GetPullRequestAsync(Owner, Repo, It.IsAny<int>(), Token, It.IsAny<CancellationToken>()))
-            .Returns<string, string, int, string, CancellationToken>((_, _, _, _, _) =>
+        // Every GitHub call accepts any token and records the one it was given, so a test can tell which token each call used.
+        GitHub.Setup(g => g.GetPullRequestAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, int, string, CancellationToken>((_, _, _, token, _) =>
             {
+                RecordToken("pull-request", token);
                 var call = Interlocked.Increment(ref _pullRequestCalls);
                 return Task.FromResult(PullRequestByCall?.Invoke(call) ?? (call == 1 ? PullRequest : PullRequestAfterModel ?? PullRequest));
             });
 
-        GitHub.Setup(g => g.GetPullRequestFilesAsync(Owner, Repo, It.IsAny<int>(), Token, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => Files);
+        GitHub.Setup(g => g.GetPullRequestFilesAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, int, string, CancellationToken>((_, _, _, token, _) =>
+            {
+                RecordToken("files", token);
+                return Task.FromResult<IReadOnlyList<PullRequestFile>>(Files);
+            });
 
-        GitHub.Setup(g => g.ListIssueCommentsAsync(Owner, Repo, It.IsAny<int>(), Token, It.IsAny<CancellationToken>()))
-            .Returns<string, string, int, string, CancellationToken>((_, _, prNumber, _, _) =>
+        GitHub.Setup(g => g.ListIssueCommentsAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, int, string, CancellationToken>((_, _, prNumber, token, _) =>
             {
                 lock (_gate)
                 {
+                    _usedTokens.Add(("comments", token));
                     return Task.FromResult<IReadOnlyList<IssueComment>>(CommentsOn(prNumber).ToList());
                 }
             });
 
-        GitHub.Setup(g => g.CreateCheckRunAsync(Owner, Repo, It.IsAny<CheckRunRequest>(), Token, It.IsAny<CancellationToken>()))
-            .Returns<string, string, CheckRunRequest, string, CancellationToken>((_, _, checkRun, _, _) =>
+        GitHub.Setup(g => g.CreateCheckRunAsync(Owner, Repo, It.IsAny<CheckRunRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, CheckRunRequest, string, CancellationToken>((_, _, checkRun, token, _) =>
             {
                 lock (_gate)
                 {
+                    _usedTokens.Add(("check-run", token));
                     _callOrder.Add("check-run");
                     _createdCheckRuns.Add(checkRun);
                     return Task.FromResult(9000L + _createdCheckRuns.Count);
                 }
             });
 
-        GitHub.Setup(g => g.CreateIssueCommentAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), Token, It.IsAny<CancellationToken>()))
-            .Returns<string, string, int, string, string, CancellationToken>(async (_, _, prNumber, body, _, _) =>
+        GitHub.Setup(g => g.CreateIssueCommentAsync(Owner, Repo, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, int, string, string, CancellationToken>(async (_, _, prNumber, body, token, _) =>
             {
                 await CommentWriteHandler(Interlocked.Increment(ref _commentWrites) - 1);
 
@@ -97,19 +106,21 @@ internal sealed class ReviewOrchestratorHarness
                 {
                     var id = ++_lastCommentId;
                     CommentsOn(prNumber).Add(new IssueComment(id, AppLogin, body));
+                    _usedTokens.Add(("comment:create", token));
                     _callOrder.Add("comment:create");
                     _createdComments.Add((prNumber, body));
                     return id;
                 }
             });
 
-        GitHub.Setup(g => g.UpdateIssueCommentAsync(Owner, Repo, It.IsAny<long>(), It.IsAny<string>(), Token, It.IsAny<CancellationToken>()))
-            .Returns<string, string, long, string, string, CancellationToken>(async (_, _, commentId, body, _, _) =>
+        GitHub.Setup(g => g.UpdateIssueCommentAsync(Owner, Repo, It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, long, string, string, CancellationToken>(async (_, _, commentId, body, token, _) =>
             {
                 await CommentWriteHandler(Interlocked.Increment(ref _commentWrites) - 1);
 
                 lock (_gate)
                 {
+                    _usedTokens.Add(("comment:update", token));
                     foreach (var comments in _comments.Values)
                     {
                         var index = comments.FindIndex(comment => comment.Id == commentId);
@@ -182,6 +193,12 @@ internal sealed class ReviewOrchestratorHarness
 
     public ModelResultCache Cache { get; }
 
+    /// <summary>
+    /// When set, returned by every installation token fetch made once the model has been called, as a token cache returns a new token once the
+    /// first one is close to expiring after minutes of model work. Unset, every fetch returns <see cref="Token"/>.
+    /// </summary>
+    public string? TokenAfterModel { get; set; }
+
     /// <summary>What <c>CanWriteChecks</c> answers once a token has been fetched. False means the installation never granted the Checks permission.</summary>
     public bool CanWriteChecks { get; set; } = true;
 
@@ -230,6 +247,9 @@ internal sealed class ReviewOrchestratorHarness
     public IReadOnlyList<(long Id, string Body)> UpdatedComments => Snapshot(_updatedComments);
 
     public IReadOnlyList<ClaudeRunRequest> ClaudeRequests => Snapshot(_claudeRequests);
+
+    /// <summary>Every GitHub call in the order it was made (<c>pull-request</c>, <c>files</c>, <c>comments</c>, <c>check-run</c>, <c>comment:create</c>, <c>comment:update</c>), with the token it used.</summary>
+    public IReadOnlyList<(string Operation, string Token)> UsedTokens => Snapshot(_usedTokens);
 
     /// <summary>
     /// A run that answered: every check passes but Functionality, a concern with <paramref name="note"/>, and one finding on <c>src/Foo.cs</c>
@@ -338,6 +358,14 @@ internal sealed class ReviewOrchestratorHarness
     public Task<ReviewRunResult> RunAsync(ReviewQueueMessage? message = null, CancellationToken cancellationToken = default)
     {
         return BuildSut().ReviewPullRequestAsync(message ?? QueuedMessage, cancellationToken);
+    }
+
+    private void RecordToken(string operation, string token)
+    {
+        lock (_gate)
+        {
+            _usedTokens.Add((operation, token));
+        }
     }
 
     private List<T> Snapshot<T>(List<T> items)
