@@ -274,7 +274,7 @@ public class ReviewOrchestratorTests
         var harness = new ReviewOrchestratorHarness
         {
             ClaudeHandler = (index, _, _) => index == 0
-                ? Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."))
+                ? Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured."))
                 : Task.FromException<ClaudeRunResult>(new HttpRequestException("The AI service is unavailable."))
         };
 
@@ -294,7 +294,7 @@ public class ReviewOrchestratorTests
         {
             ClaudeHandler = (index, _, _) => index == 0
                 ? Task.FromException<ClaudeRunResult>(new HttpRequestException("The AI service is unavailable."))
-                : Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."))
+                : Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured."))
         };
 
         // Act
@@ -313,14 +313,14 @@ public class ReviewOrchestratorTests
         // Arrange — the processor reports a failure that retrying cannot fix to the author at once
         var harness = new ReviewOrchestratorHarness
         {
-            ClaudeHandler = (_, _, _) => Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."))
+            ClaudeHandler = (_, _, _) => Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured."))
         };
 
         // Act
         var act = () => harness.RunAsync();
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*AnthropicApiKey*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppAnthropicApiKey*");
         ShouldHavePublishedNothing(harness);
     }
 
@@ -332,7 +332,7 @@ public class ReviewOrchestratorTests
         {
             ClaudeHandler = (index, _, _) => index == 0
                 ? Task.FromResult(ReviewOrchestratorHarness.Ended(RunOutcome.Refused))
-                : Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."))
+                : Task.FromException<ClaudeRunResult>(new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured."))
         };
 
         // Act

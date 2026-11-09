@@ -145,7 +145,7 @@ named `Claude--Something`, `Review--Something` or `Runtime--Something` would the
 vault is shared with other applications, check the name of any new secret in it against every application that reads the vault, not only
 this one, because a secret added for another application can stop this one at its next start.
 
-The secrets are `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret` and, optional, `AppConfigurationConnectionString` (section 10)
+The secrets are `GitHubReviewAppAnthropicApiKey`, `GitHubReviewAppPrivateKey`, `GitHubReviewAppWebhookSecret` and, optional, `AppConfigurationConnectionString` (section 10)
 and `UptraceDsn` (section 6; without it the app exports no traces, metrics or logs, and says so at start with a warning outside Development and
 an Information line in it). None is checked at startup, except that an App Configuration connection string that is set but cannot be parsed is
 reported at start (a warning naming the secret) and not used. The webhook secret is read on every request, so a missing one fails every request.

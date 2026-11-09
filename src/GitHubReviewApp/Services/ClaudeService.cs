@@ -9,7 +9,7 @@ namespace GitHubReviewApp.Services;
 /// </summary>
 public class ClaudeService : IClaudeService
 {
-    private const string ApiKeySecretName = "AnthropicApiKey";
+    private const string ApiKeySecretName = "GitHubReviewAppAnthropicApiKey";
     private const int MaxRejectionReasonChars = 300;
     private const string RefusalFallbackBeta = "server-side-fallback-2026-07-01";
 

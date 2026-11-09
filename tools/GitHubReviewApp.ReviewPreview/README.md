@@ -33,16 +33,16 @@ Different, on purpose:
    decides where messages go: the tool needs only the URL, not the channel id. If your workspace needs an admin to approve new apps,
    request it there.
 3. **Secrets.** The tool reads two secrets, from user secrets (kept in your profile, outside the repository) or environment variables:
-   `AnthropicApiKey` and `SlackWebhookUrl`. Both are secrets: never commit them or paste them into a ticket. To set them without leaving
+   `GitHubReviewAppAnthropicApiKey` and `SlackWebhookUrl`. Both are secrets: never commit them or paste them into a ticket. To set them without leaving
    them in your shell history (Git Bash):
 
    ```bash
-   read -rs ANTHROPIC_KEY && dotnet user-secrets set AnthropicApiKey "$ANTHROPIC_KEY" --project tools/GitHubReviewApp.ReviewPreview; unset ANTHROPIC_KEY
+   read -rs ANTHROPIC_KEY && dotnet user-secrets set GitHubReviewAppAnthropicApiKey "$ANTHROPIC_KEY" --project tools/GitHubReviewApp.ReviewPreview; unset ANTHROPIC_KEY
    read -rs SLACK_URL && dotnet user-secrets set SlackWebhookUrl "$SLACK_URL" --project tools/GitHubReviewApp.ReviewPreview; unset SLACK_URL
    ```
 
    Each `read -rs` waits for you to paste the value and shows nothing. In PowerShell, copy the value and set it from the clipboard, so no
-   prompt is involved: `dotnet user-secrets set AnthropicApiKey (Get-Clipboard) --project tools/GitHubReviewApp.ReviewPreview`. (A hidden
+   prompt is involved: `dotnet user-secrets set GitHubReviewAppAnthropicApiKey (Get-Clipboard) --project tools/GitHubReviewApp.ReviewPreview`. (A hidden
    prompt such as `Read-Host -MaskInput` can take Ctrl+V as a typed character instead of a paste.) Or edit the file itself:
    `%APPDATA%\Microsoft\UserSecrets\github-review-app-review-preview\secrets.json`, a JSON object with the two names.
 
