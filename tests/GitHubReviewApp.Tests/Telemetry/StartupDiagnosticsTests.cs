@@ -135,7 +135,7 @@ public class StartupDiagnosticsTests
     }
 
     [Fact]
-    public void LogRuntimeSettingsSource_GivenNoAppConfiguration_Should_SayTheAppSettingsValuesApply()
+    public void LogRuntimeSettingsSource_GivenNoAppConfiguration_Should_SayTheDefaultsOrApplicationSettingsApply()
     {
         // Arrange
         var logger = new ListLogger<StartupDiagnosticsTests>();
@@ -146,11 +146,12 @@ public class StartupDiagnosticsTests
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(LogLevel.Information);
-        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("appsettings");
+        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("Runtime defaults").And.Contain("application settings")
+            .And.NotContain("appsettings.json");
     }
 
     [Fact]
-    public void LogRuntimeSettingsSource_GivenAppConfiguration_Should_SayTheStoreAppliesOnceReadAndTheAppSettingsValuesUntilThen()
+    public void LogRuntimeSettingsSource_GivenAppConfiguration_Should_SayTheStoreAppliesOnceReadAndTheDefaultsUntilThen()
     {
         // Arrange
         var logger = new ListLogger<StartupDiagnosticsTests>();
@@ -162,12 +163,12 @@ public class StartupDiagnosticsTests
         var entry = logger.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(LogLevel.Information);
         entry.Message.Should().Contain("App Configuration").And.Contain("GitHubReviewApp:Runtime")
-            .And.Contain("once the store has been read").And.Contain("appsettings.json values apply")
+            .And.Contain("once the store has been read").And.Contain("Runtime defaults and application settings apply")
             .And.NotContain("override");
     }
 
     [Fact]
-    public void LogRuntimeSettingsSource_GivenAMalformedConnectionString_Should_WarnNamingTheSecretAndSayTheAppSettingsValuesApply()
+    public void LogRuntimeSettingsSource_GivenAMalformedConnectionString_Should_WarnNamingTheSecretAndSayTheDefaultsApply()
     {
         // Arrange
         var logger = new ListLogger<StartupDiagnosticsTests>();
@@ -178,6 +179,6 @@ public class StartupDiagnosticsTests
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(LogLevel.Warning);
-        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("not a well-formed").And.Contain("appsettings.json");
+        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("not a well-formed").And.Contain("Runtime defaults");
     }
 }

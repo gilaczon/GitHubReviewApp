@@ -19,7 +19,7 @@ public static class AppConfigurationSetup
 
     /// <summary>
     /// How long adding the source may wait for the store at startup. The provider's own default is 100 seconds, which would hold every cold start
-    /// and scale-out during a store outage, against GitHub's 10 second webhook timeout. After this the host starts on the appsettings values and the
+    /// and scale-out during a store outage, against GitHub's 10 second webhook timeout. After this the host starts on the runtime defaults (or the application settings) and the
     /// refresh picks the store up when it is reachable again.
     /// </summary>
     public static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(3);
@@ -30,7 +30,7 @@ public static class AppConfigurationSetup
     /// <summary>
     /// Adds App Configuration to the configuration when the connection string secret is set and well formed, and says what it did. It must run
     /// after the secrets are loaded. The source is optional and its startup wait is bounded by <see cref="StartupTimeout"/>, so a store that cannot
-    /// be reached at startup does not stop the host and the appsettings values apply. A malformed secret would make the package throw while the host
+    /// be reached at startup does not stop the host and the runtime defaults (or the application settings) apply. A malformed secret would make the package throw while the host
     /// is built, so it is checked first and, when bad, nothing is added at all: with no source there is no refresher either, and the middleware
     /// then has none to ask.
     /// </summary>

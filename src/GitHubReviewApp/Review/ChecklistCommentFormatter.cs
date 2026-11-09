@@ -17,6 +17,7 @@ internal static class ChecklistCommentFormatter
     private const string FailIcon = "❌";
     private const string NotApplicableIcon = "➖";
     private const string StricterRatingShown = "Reviewed twice; the stricter rating of each check is shown.";
+    private const string SeriousWithoutNote = "no reason given by the reviewer.";
     private const int ShortShaLength = 10;
 
     // A heading (one to six number signs, then a space, a tab or nothing more) or a code fence (at least three backticks or tildes) at the
@@ -127,6 +128,9 @@ internal static class ChecklistCommentFormatter
             CheckStatus.Pass => line,
             CheckStatus.NotApplicable => line + ": not applicable",
             CheckStatus.Concern or CheckStatus.Fail when note.Length == 0 => line,
+
+            // The model flagged it serious but wrote no note, so the reader gave it the placeholder; "SERIOUS: Not assessed" would contradict itself.
+            CheckStatus.Concern or CheckStatus.Fail when check.IsSerious && check.Note == Checklist.NotAssessedNote => $"{line}: SERIOUS: {SeriousWithoutNote}",
             CheckStatus.Concern or CheckStatus.Fail when check.IsSerious => $"{line}: SERIOUS: {note}",
             CheckStatus.Concern or CheckStatus.Fail => $"{line}: {note}",
             _ => throw new UnreachableException($"The check status {check.Status} has no line in the checklist.")

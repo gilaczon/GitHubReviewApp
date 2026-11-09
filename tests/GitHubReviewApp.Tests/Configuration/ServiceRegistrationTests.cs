@@ -202,9 +202,9 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
-    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_GiveTheRuntimeDefaults()
+    public void AddReviewPipeline_GivenTheShippedAppsettings_Should_GiveTheRuntimeDefaultsFromCode()
     {
-        // Arrange — the Runtime section of appsettings.json is what applies without App Configuration, and it must not drift from the code's defaults
+        // Arrange — appsettings.json holds no Runtime section, so the code's defaults apply without App Configuration or an application setting
         using var provider = BuildProvider();
 
         // Act
@@ -212,8 +212,23 @@ public class ServiceRegistrationTests
 
         // Assert
         current.Should().Be(RuntimeSettings.Default);
-        provider.GetRequiredService<IConfiguration>().GetSection("Runtime").GetChildren().Select(child => child.Key)
-            .Should().BeEquivalentTo("IsReviewEnabled", "SonnetModel", "OpusModel");
+        provider.GetRequiredService<IConfiguration>().GetSection("Runtime").GetChildren().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RuntimeSettings_GivenAnApplicationSettingReadBeforeTheShippedAppsettings_Should_SwitchReviewsOff()
+    {
+        // Arrange — production order: the Function App's application settings first, appsettings.json after them (Program.cs)
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Runtime:IsReviewEnabled"] = "false" })
+            .AddJsonFile(Path.Combine(AppContext.BaseDirectory, "appsettings.json"), optional: false)
+            .Build();
+
+        // Act
+        using var monitor = new RuntimeSettingsMonitor(configuration, NullLogger<RuntimeSettingsMonitor>.Instance);
+
+        // Assert
+        monitor.Current.IsReviewEnabled.Should().BeFalse();
     }
 
     // ── Settings binding ─────────────────────────────────────────────────────

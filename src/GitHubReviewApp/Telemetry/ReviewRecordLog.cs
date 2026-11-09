@@ -14,7 +14,7 @@ internal static class ReviewRecordLog
     /// <summary>
     /// Logs the record of one finished review. <paramref name="merged"/> and <paramref name="outcome"/> are null for a review that failed.
     /// <paramref name="unlistedFileCount"/> is the number of changed files GitHub did not list (a pull request of more than 3,000 files): they
-    /// are counted as left out, as the comment counts them.
+    /// are counted as left out, as in the comment. The record's left-out count leaves out the cut files, which it writes as partial.
     /// </summary>
     public static void Write(
         ILogger logger,
@@ -28,7 +28,8 @@ internal static class ReviewRecordLog
         decimal? totalCost,
         TimeSpan duration)
     {
-        // The same count as the comment's: every listed file not included, plus the files GitHub did not list at all.
+        // Every file whose diff was not sent at all: the listed files not included, plus the files GitHub did not list. Cut files were sent and are
+        // counted as partial instead, so the comment's left-out count (which adds the cut files) is this plus the partial count.
         var leftOutCount = input.Files.Count - input.IncludedFileCount + unlistedFileCount;
 
         logger.LogInformation(

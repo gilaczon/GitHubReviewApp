@@ -8,7 +8,8 @@ var host = new HostBuilder()
         // The appsettings files are chained after the worker's own sources (the Function App's application settings among them) on purpose, so
         // on a shared key the reviewed file wins: the static settings live in the file, and the settings meant to change at runtime live in App
         // Configuration (added below). An application setting can therefore not override a key the file sets; docs/operations.md says so. Do not
-        // "fix" the order to put the environment first.
+        // "fix" the order to put the environment first. The Runtime section is kept out of the file on purpose: its defaults are in code
+        // (RuntimeSettings.Default), so Runtime__IsReviewEnabled=false as an application setting stops reviews without App Configuration.
         var configManager = new ConfigurationManager();
         configManager.AddJsonFile($"appsettings.json", optional: false);
         configManager.AddJsonFile($"appsettings.{context.HostingEnvironment.EnvironmentName}.json", optional: true, reloadOnChange: false);
@@ -44,7 +45,7 @@ StartupDiagnostics.LogRuntimeSettingsSource(
     appConfigurationOutcome);
 
 // The runtime settings monitor is a singleton that nothing resolves before the first invocation. Resolving it here makes an invalid Runtime value
-// (in appsettings.json, or in the store at startup) warn in the startup log, where the operations guide sends the operator, instead of at the
+// (in an application setting, or in the store at startup) warn in the startup log, where the operations guide sends the operator, instead of at the
 // first review. It never stops the host: the monitor catches everything and keeps the last good value.
 host.Services.GetRequiredService<IRuntimeSettings>();
 

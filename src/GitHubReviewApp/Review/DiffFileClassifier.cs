@@ -64,7 +64,8 @@ public static class DiffFileClassifier
     // is also a personal-data keyword.
     private static readonly HashSet<string> _licenceNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "LICENSE", "LICENCE", "COPYING", "NOTICE"
+        "LICENSE", "LICENCE", "LICENSES", "LICENCES", "COPYING", "NOTICE", "NOTICES", "THIRD_PARTY_LICENSES", "THIRD-PARTY-LICENSES",
+        "THIRD_PARTY_LICENCES", "THIRD-PARTY-LICENCES", "THIRD_PARTY_NOTICES", "THIRD-PARTY-NOTICES", "ThirdPartyNotices"
     };
 
     private static readonly string[] _licenceNamePrefixes = ["LICENSE-", "LICENCE-"];
@@ -108,11 +109,11 @@ public static class DiffFileClassifier
         "pipelines", ".azuredevops", "infra", "deploy", "deployment", "helm", "charts", "k8s", "kubernetes"
     };
 
-    // Source code that a pipeline folder holds as part of the pipeline: scripts and infrastructure as code. Any other source code in a folder
-    // of that name is the application's ("src/components/charts/LineChart.vue").
+    // Source code that a pipeline folder holds as part of the pipeline: scripts (Python deploy scripts and the SQL a release runs among them) and
+    // infrastructure as code. Any other source code in a folder of that name is the application's ("src/components/charts/LineChart.vue").
     private static readonly HashSet<string> _scriptAndInfrastructureExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".sh", ".bash", ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".bicep", ".tf"
+        ".sh", ".bash", ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".py", ".sql", ".bicep", ".tf"
     };
 
     /// <summary>

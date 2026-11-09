@@ -396,7 +396,8 @@ public class ReviewOrchestratorTests
         // Assert
         var entry = harness.Logger.Entries.Should().ContainSingle(entry => entry.Level >= LogLevel.Warning).Subject;
         entry.Level.Should().Be(expectedLevel);
-        entry.Message.Should().Contain("my-org/my-service#7").And.Contain(first.ToString()).And.Contain(SonnetModel).And.NotContain(RejectedDetail);
+        entry.Message.Should().Contain("my-org/my-service#7").And.Contain(first.ToString()).And.Contain(SonnetModel).And.Contain("unless the pull request has moved on")
+            .And.NotContain(RejectedDetail);
     }
 
     // ── Reviewed once per pull request and commit ────────────────────────────

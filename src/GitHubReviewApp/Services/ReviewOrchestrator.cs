@@ -374,13 +374,13 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         if (endings.All(ending => ending.Run!.Outcome == RunOutcome.Rejected))
         {
             _logger.LogError(
-                "Every run of the review of {Owner}/{Repo}#{PrNumber} was rejected by the AI service ({Outcomes}) on model {Model}: the request itself is wrong, so every review will fail the same way until the model or the request settings change. \"Review failed\" is published.",
+                "Every run of the review of {Owner}/{Repo}#{PrNumber} was rejected by the AI service ({Outcomes}) on model {Model}: the request itself is wrong, so every review will fail the same way until the model or the request settings change. \"Review failed\" is published unless the pull request has moved on or this commit was already reviewed.",
                 message.Owner, message.Repo, message.PrNumber, outcomes, choice.Model);
             return;
         }
 
         _logger.LogWarning(
-            "No run of the review of {Owner}/{Repo}#{PrNumber} gave an answer ({Outcomes}) on model {Model}. \"Review failed\" is published.",
+            "No run of the review of {Owner}/{Repo}#{PrNumber} gave an answer ({Outcomes}) on model {Model}. \"Review failed\" is published unless the pull request has moved on or this commit was already reviewed.",
             message.Owner, message.Repo, message.PrNumber, outcomes, choice.Model);
     }
 

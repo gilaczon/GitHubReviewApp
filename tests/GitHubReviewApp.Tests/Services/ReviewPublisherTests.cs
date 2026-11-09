@@ -98,7 +98,7 @@ public class ReviewPublisherTests
     }
 
     [Fact]
-    public async Task PublishAsync_GivenTheCheckRunFails_Should_ThrowBeforeTouchingTheComment()
+    public async Task PublishAsync_GivenTheCheckRunFailsForAReasonWorthRetrying_Should_ThrowBeforeTouchingTheComment()
     {
         // Arrange
         var (sut, github, calls) = Build();
@@ -112,5 +112,26 @@ public class ReviewPublisherTests
         // Assert
         await act.Should().ThrowAsync<GitHubApiException>();
         calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task PublishAsync_GivenGitHubRefusesTheCheckRunForGood_Should_StillWriteTheComment(HttpStatusCode refusal)
+    {
+        // Arrange — a refusal a retry would not change, such as Checks revoked between the token and the request
+        var (sut, github, calls) = Build();
+        github.Setup(g => g.CreateCheckRunAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CheckRunRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new GitHubApiException("refused", refusal, false));
+        IssueComment[] comments = [Comment(12, AppLogin, EarlierSha)];
+
+        // Act
+        await sut.PublishAsync(_message, Token, AppLogin, comments, NewBody, _checkRun, canWriteChecks: true, CancellationToken.None);
+
+        // Assert
+        calls.Should().Equal("update comment");
+        github.Verify(
+            g => g.UpdateIssueCommentAsync(_message.Owner, _message.Repo, 12, NewBody, Token, It.IsAny<CancellationToken>()),
+            Times.Once());
     }
 }

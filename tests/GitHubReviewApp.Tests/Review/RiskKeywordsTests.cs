@@ -110,6 +110,37 @@ public class RiskKeywordsTests
     }
 
     [Theory]
+    [InlineData("src/Extensions/ServiceCollectionExtensions.cs")]
+    [InlineData("src/Startup/IServiceCollectionExtensions.cs")]
+    [InlineData("src/ViewModels/ObservableCollectionHelper.cs")]
+    [InlineData("src/Hosting/service_collections.py")]
+    public void MatchHighRiskTier_GivenAFrameworkTypeEndingInAKeyword_Should_ReturnNull(string path)
+    {
+        // Arrange — "collection" after "service" or "observable" is the .NET type, not debt collection
+
+        // Act
+        var tier = RiskKeywords.MatchHighRiskTier(path);
+
+        // Assert
+        tier.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("src/Collections/DebtCollectionService.cs")]
+    [InlineData("src/CollectionAgency/Client.cs")]
+    [InlineData("src/Services/CollectionsService.cs")]
+    public void MatchHighRiskTier_GivenDebtCollectionCode_Should_ReturnPayments(string path)
+    {
+        // Arrange — "collection" on its own or after another word is still the payments keyword
+
+        // Act
+        var tier = RiskKeywords.MatchHighRiskTier(path);
+
+        // Assert
+        tier.Should().Be(RiskTier.Payments);
+    }
+
+    [Theory]
     [InlineData("src/Spanner.cs")]
     [InlineData("src/Tokenizer.cs")]
     [InlineData("src/Utils/StringHelpers.cs")]

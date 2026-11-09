@@ -92,7 +92,9 @@ Anti-goals (would be failures even if everything else works)
       "already reviewed" (another instance may have finished first).
    9. Create the check run, already completed with its conclusion (5.9), then upsert the PR comment (5.8). The comment is the
       review record (5.2) and is written last, so a failure between the two leads to a retry instead of a PR whose comment was never
-      written. A retry may add a second, identical check run, which is harmless.
+      written. A retry may add a second, identical check run, which is harmless. A check run GitHub refuses for a reason a retry would
+      not change (a 403 or a 422) is logged and the comment is still written, since it would fail the same way on every retry and on
+      the "Review failed" notice too, and the author would be told nothing.
    10. Log the review record (5.10).
 4. **Poison handler** (existing trigger): after the last retry, creates the "Review failed" check run and posts the "Review failed"
    comment (5.9, 5.8).
@@ -119,7 +121,8 @@ All lengths are UTF-8 bytes unless stated.
 2. Generated or vendored (existing rules). Ordered after docs.
 3. Tests (existing test-path rules). Ordered after the rest.
 4. Docs (`.md`, `.mdx`, `.markdown`, `.txt`, `.rst`, `.adoc`, licence files, or under a `docs/` folder). Ordered after tests. A licence
-   file is one named `LICENSE`, `LICENCE`, `COPYING` or `NOTICE`, or starting `LICENSE-` or `LICENCE-`, in any case and with no
+   file is one named `LICENSE`, `LICENCE`, `COPYING` or `NOTICE`, their plurals, `THIRD_PARTY_LICENSES` or `THIRD_PARTY_NOTICES` (with
+   hyphens too, or `ThirdPartyNotices`), or starting `LICENSE-` or `LICENCE-`, in any case and with no
    extension or any extension but a source-code or configuration one (`COPYING.LESSER`): it is documentation, though `license` is a
    personal-data keyword. A source-code or configuration file named like one (`src/Models/License.cs`, `license.json`) is the
    application's own, classed as it would be anywhere else.
@@ -140,13 +143,16 @@ keyword with one final `s` added (`jwts` matches `jwt`, `logins` matches `login`
 | bank login | bank, banks, banking, openbanking, bankstatement, bankstatements, basiq, illion, yodlee, proviso, creditsense, cdr, consent, consents |
 | personal data | customer, customers, pii, personal, person, profile, profiles, kyc, aml, address, addresses, dob, birth, birthdate, phone, mobile, email, emails, contact, contacts, applicant, applicants, borrower, borrowers, licence, license, passport, medicare, document, documents, verification, privacy, gdpr, tfn, employment, income, payslip, payslips, member, members |
 
+`collection` right after `service`, `observable`, `concurrent`, `blocking`, `only`, `keyed`, `value`, `key` or `endpoint` is a
+framework type (`IServiceCollection`, `ObservableCollection`), not debt collection, and does not match.
+
 Pipelines and workflows: `.github/workflows/*`, `azure-pipelines*`, `Dockerfile*` and `*.dockerfile`, `.gitlab-ci.yml`, `Jenkinsfile`,
 infrastructure as code anywhere (`*.bicep`, `*.bicepparam`, `*.tf`, `*.tfvars`), and the files kept in a folder named `pipelines`,
 `.azuredevops`, `infra`, `deploy`, `deployment`, `helm`, `charts`, `k8s` or `kubernetes` (at any depth, any case), such as ARM
 templates, Helm charts and Kubernetes manifests. Application code in such a folder is not a pipeline file because of the folder: a file
 with a source-code extension there (`src/components/charts/LineChart.vue`, `src/Api/Infra/AppDbContext.cs`) is classed as it would be
-anywhere else, unless it is a script or infrastructure code (`.sh`, `.bash`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`, `.bicep`,
-`.tf`). Everything else in those folders (YAML, JSON, Helm `.tpl`, files with no extension) stays a pipeline file. Config:
+anywhere else, unless it is a script or infrastructure code (`.sh`, `.bash`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`, `.py`, `.sql`,
+`.bicep`, `.tf`): a Python deploy script or the SQL a release runs is part of the pipeline. Everything else in those folders (YAML, JSON, Helm `.tpl`, files with no extension) stays a pipeline file. Config:
 `appsettings*.json`, `*.config`, `host.json`, `.env*`, `*.json`,
 `*.yml`, `*.yaml`, `*.xml`, `*.toml`, `*.ini`, `*.properties`, project and build files (`*.csproj`, `*.props`, `*.targets`, `*.sln`,
 `*.slnx`, `package.json`, `global.json`, `nuget.config`).
@@ -306,7 +312,7 @@ spec's order), the counts line ("1 pass, 4 concerns, 1 fail, 2 n/a"), "To fix, w
 there are none), the coverage line, the footer, then the hidden marker.
 
 - Icons: pass ✅, concern ⚠️, fail ❌, na ➖. A `pass` line has no note text after the label; a `na` with no note says "not
-  applicable"; a serious note starts with "SERIOUS: ".
+  applicable"; a serious note starts with "SERIOUS: ", and a serious check whose note is the placeholder reads "SERIOUS: no reason given by the reviewer.".
 - Finding line: `- {icon of its check} {Check label} `{file}:{line}`: {issue} Fix: {fix}`; a line of 0 or less shows the file only.
   A file the model named is matched to a changed file when possible (the existing `PathResolver`), else shown as given.
 - Coverage line: shown only when some diff was left out or cut. It uses the stricter run's coverage note; if that is empty, the code
@@ -351,8 +357,9 @@ model.
 
 One structured log line per finished review (Information): repository, PR number, head SHA, model chosen, run count, for each run
 its outcome, answering model, own result, the eight statuses as a compact string, tokens (input, output, cache read, cache write)
-and cost; the merged result, serious count, whether the runs agreed, the number of files included, partial and left out (the same
-count as the comment's, so the files GitHub did not list are in it) and how many GitHub did not list, the total cost and the
+and cost; the merged result, serious count, whether the runs agreed, the number of files included, partial and left out (files whose
+diff was not sent at all, the files GitHub did not list among them; the comment's left-out count is this plus the partial files) and
+how many GitHub did not list, the total cost and the
 duration. No diff text, no notes, findings or summary, no titles or descriptions, no secrets.
 
 Cost per attempt = (input x input price + output x output price + cache write x cache-write price + cache read x cache-read price) /
@@ -386,13 +393,15 @@ Static, in `appsettings.json` (validated at startup, unknown keys refused, as to
 
 Runtime, the house rule's "settings that must change at runtime", in a `Runtime` section that is **not** bound by the strict startup
 binder: `IsReviewEnabled` (true), `SonnetModel` (`claude-sonnet-5-5`), `OpusModel` (`claude-opus-5-5`). Defaults live in
-`appsettings.json`. Azure App Configuration overrides them when the `AppConfigurationConnectionString` secret is present (from Key
+code (`RuntimeSettings.Default`), not in `appsettings.json`, so a Function App application setting such as
+`Runtime__IsReviewEnabled=false` can set them even though the file wins over application settings for every key it holds. Azure App
+Configuration overrides both when the `AppConfigurationConnectionString` secret is present (from Key
 Vault through TopSecret, per `/dev-appconfig-integrate`):
 - Added in `Program.cs` after `AddSecretsToConfiguration`, on the same `ConfigurationManager` (the skill's non-web bootstrap), with
   `optional: true` and a startup timeout of a few seconds (`AppConfigurationSetup.StartupTimeout`, well below GitHub's 10-second
-  webhook timeout), so an unreachable store holds a cold start only briefly and the appsettings values apply until a refresh reaches
-  it; the package logs each failed refresh ("A refresh operation failed."). A connection string the package cannot parse is never
-  added (`AppConfigurationOutcome.Invalid`): the app still starts, the appsettings values apply, and a startup warning names the
+  webhook timeout), so an unreachable store holds a cold start only briefly and the runtime defaults (or the application settings) apply until a refresh
+  reaches it; the package logs each failed refresh ("A refresh operation failed."). A connection string the package cannot parse is never
+  added (`AppConfigurationOutcome.Invalid`): the app still starts, the runtime defaults (or the application settings) apply, and a startup warning names the
   secret, never its value.
 - Selects only keys `GitHubReviewApp:Runtime:*` (no label), trimming `GitHubReviewApp:`, so the store can never reach the static
   settings. Refresh on the sentinel `GitHubReviewApp:Sentinel` (refresh all), every 120 seconds in Production and 30 otherwise,
@@ -404,7 +413,7 @@ Vault through TopSecret, per `/dev-appconfig-integrate`):
   boolean). A missing key takes its default; an invalid key keeps its last good value (its default at startup) and logs a warning
   that names the key, never the value; the snapshot is published only when it changes. So a bad model id never stops the switch from
   turning reviews off. Its callback never throws.
-- Without the secret, App Configuration is not added and the app logs that the appsettings values are in use.
+- Without the secret, App Configuration is not added and the app logs that the runtime defaults (or the application settings) are in use.
 
 Secrets (Key Vault through TopSecret, unchanged): `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret`, and now the
 optional `AppConfigurationConnectionString` (the store's read-only connection string). No secret name may start with `Claude--`,

@@ -94,7 +94,7 @@ Coverage: {coverage note, only if part of the diff was left out}
 {owner}/{repo} #{number} · {head} → {base} · by {author} · {files} files +{added} -{deleted} ({included} reviewed) · {model} at {sha first 10}
 ```
 
-Icons: pass ✅, concern ⚠️, fail ❌, na ➖. A `na` check with no note shows "not applicable". A serious check's note starts with "SERIOUS: ". Add a one-line counts summary if useful, for example "1 pass, 4 concerns, 1 fail, 2 n/a".
+Icons: pass ✅, concern ⚠️, fail ❌, na ➖. A `na` check with no note shows "not applicable". A serious check's note starts with "SERIOUS: "; a serious `concern` with no note reads "SERIOUS: no reason given by the reviewer." rather than the placeholder. Add a one-line counts summary if useful, for example "1 pass, 4 concerns, 1 fail, 2 n/a".
 
 ## Structured output schema (the reviewer's answer)
 

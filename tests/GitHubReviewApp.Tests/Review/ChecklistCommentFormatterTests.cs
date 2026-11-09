@@ -107,6 +107,20 @@ public class ChecklistCommentFormatterTests
     }
 
     [Fact]
+    public void FormatReview_GivenASeriousConcernTheModelGaveNoNote_Should_SayNoReasonWasGivenInsteadOfNotAssessed()
+    {
+        // Arrange — the reader gives a concern with no note the placeholder, and the model still marked it serious
+        var merged = WithChecks(TypicalReview(), new RatedCheck(CheckId.Functionality, CheckStatus.Concern, Checklist.NotAssessedNote, true));
+
+        // Act
+        var body = Format(Context(), merged, [_doubleRefund, _untestedFailure]);
+
+        // Assert
+        body.Split('\n').Should().Contain("- ⚠️ Functionality & implementation: SERIOUS: no reason given by the reviewer.");
+        body.Should().NotContain("SERIOUS: Not assessed");
+    }
+
+    [Fact]
     public void FormatReview_GivenRunsWithDifferentVerdicts_Should_NameBothStricterFirst()
     {
         // Arrange — one run failed Security and the other rated it a pass

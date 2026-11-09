@@ -121,9 +121,10 @@ the file sets (an application setting for `Review:MaxConcurrentModelRequests` is
 comma-separated list) stops the worker from starting, with the startup log naming it.
 
 The model ids and the on/off switch are not in those two sections. They are in a `Runtime` section, which the startup check does not bind,
-so that a bad value can never stop the app from starting:
+so that a bad value can never stop the app from starting. It is not in `appsettings.json`: the defaults are in the code, so an application
+setting can set these three values:
 
-| Setting | Shipped | Meaning |
+| Setting | Default | Meaning |
 |---|---|---|
 | `Runtime:IsReviewEnabled` | true | The switch. When it is false the webhook answers `200 Ignored: reviews are switched off.` and queues nothing, and a message already in the queue is skipped (`reviews.skipped` with `reason` = `SwitchedOff`). |
 | `Runtime:SonnetModel` | `claude-sonnet-5-5` | The model for most reviews. |
@@ -133,9 +134,10 @@ These can be changed while the app runs through Azure App Configuration (section
 model id has to look like `claude-` followed by lowercase letters, digits, dots and hyphens (at most 100 characters), and the switch has to be
 `true` or `false`. A value that is missing takes its default. A value that is invalid keeps the last good value of that key and logs a warning
 that names the key, never the value, so a bad model id never keeps the switch from turning reviews off. The runtime settings are read once at
-start as well, so an invalid shipped value warns in the startup log. An application setting cannot change these three values: `appsettings.json`
-is read after the application settings and wins (`Runtime__IsReviewEnabled=false` on the function app does nothing). Without App Configuration,
-stop reviews by stopping the function app or by deploying a changed `appsettings.json`.
+start as well, so an invalid value warns in the startup log. Without App Configuration, set them as application settings
+(`Runtime__IsReviewEnabled`, `Runtime__SonnetModel`, `Runtime__OpusModel`): saving an application setting restarts the function app, which
+reads it at start. `Runtime__IsReviewEnabled=false` is the emergency stop when there is no App Configuration store. When App Configuration
+is on, its keys win over these application settings once the store has been read.
 
 The secrets are loaded into the same configuration, and the Key Vault provider reads a double hyphen in a secret's name as a colon. A secret
 named `Claude--Something`, `Review--Something` or `Runtime--Something` would therefore be read as a setting under one of those sections
@@ -273,7 +275,8 @@ hidden marker, `<!-- moneyme-ai-review sha=<commit> outcome=reviewed -->` (or `o
 reviewed a commit: a pull request counts as reviewed at a commit when the app's own comment on it carries a `reviewed` marker for that commit.
 A "Review failed" comment never counts, so reopening the pull request or pushing a commit tries again. The check run is written first and the
 comment last, so a failure between the two leads to a retry instead of a pull request that was never marked reviewed. A retry may add a second,
-identical check run, which is harmless.
+identical check run, which is harmless. When GitHub refuses the check run for good (a 403 or a 422, for example the Checks permission
+withdrawn after the token was issued), the app logs a warning "GitHub refused the check run ..." and still posts the comment.
 
 When two open pull requests share a head commit (one branch with pull requests into two bases), GitHub keeps check runs per commit and shows
 the most recent run of a name. The check therefore shows whichever pull request's review finished last, while each pull request's comment

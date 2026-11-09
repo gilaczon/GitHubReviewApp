@@ -327,6 +327,8 @@ public class DiffFileClassifierTests
     [InlineData("infra/main.json", RiskTier.Pipelines)]
     [InlineData("deploy/run-migrations.ps1", RiskTier.Pipelines)]
     [InlineData("pipelines/templates/build.yml", RiskTier.Pipelines)]
+    [InlineData("deploy/publish_release.py", RiskTier.Pipelines)]
+    [InlineData("deployment/migrations/V12__add_index.sql", RiskTier.Pipelines)]
     // Each configuration rule on its own
     [InlineData(".env", RiskTier.Config)]
     [InlineData(".env.local", RiskTier.Config)]
@@ -350,7 +352,12 @@ public class DiffFileClassifierTests
     [InlineData("NOTICE", RiskTier.Docs)]
     [InlineData("LICENSE-MIT", RiskTier.Docs)]
     [InlineData("src/Lib/LICENSE", RiskTier.Docs)]
+    [InlineData("LICENSES", RiskTier.Docs)]
+    [InlineData("THIRD_PARTY_LICENSES", RiskTier.Docs)]
+    [InlineData("THIRD-PARTY-NOTICES", RiskTier.Docs)]
+    [InlineData("ThirdPartyNotices", RiskTier.Docs)]
     [InlineData("src/Verification/DriverLicenseValidator.cs", RiskTier.PersonalData)]
+    [InlineData("src/Views/DriverLicenses.html", RiskTier.PersonalData)]
     // A source-code or configuration file named like a licence file is the application's own, classed as it would be anywhere else
     [InlineData("src/Models/License.cs", RiskTier.PersonalData)]
     [InlineData("src/Notices/Notice.vue", RiskTier.Source)]

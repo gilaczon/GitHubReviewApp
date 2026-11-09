@@ -4,7 +4,8 @@ namespace GitHubReviewApp.Review;
 /// Finds the high-risk area a path or a repository name belongs to from the words in it (design 5.3). The text is split into lower-case words
 /// at every character that is not a letter or digit, at camelCase boundaries and where letters and digits meet, and a tier matches when one of
 /// those words is one of its keywords, or is one with a plural "s" added. Only whole words count: "Spanner" is not "pan", and "Tokenizer" is
-/// not "token". The keyword lists are a starting set, tuned here with tests.
+/// not "token". A keyword right after a word that makes it a framework type is not a match: "ServiceCollection" (the .NET service container)
+/// is not debt collection. The keyword lists are a starting set, tuned here with tests.
 /// </summary>
 public static class RiskKeywords
 {
@@ -42,6 +43,13 @@ public static class RiskKeywords
             "payslips", "member", "members"
         ])
     ];
+
+    // Framework types whose name ends in a keyword: the word before the keyword, for each keyword it changes. "IServiceCollection" and
+    // "ObservableCollection" are everywhere in .NET code and say nothing about money; "DebtCollection" and "CollectionAgency" still match.
+    private static readonly Dictionary<string, HashSet<string>> _frameworkWordsBefore = new()
+    {
+        ["collection"] = ["service", "observable", "concurrent", "blocking", "only", "keyed", "value", "key", "endpoint"]
+    };
 
     private sealed record TierKeywords(RiskTier Tier, HashSet<string> Keywords);
 
@@ -86,13 +94,24 @@ public static class RiskKeywords
 
         foreach (var tier in _highRiskTiers)
         {
-            if (tokens.Any(token => IsKeywordOrItsPlural(tier.Keywords, token)))
+            for (var index = 0; index < tokens.Count; index++)
             {
-                return tier.Tier;
+                if (IsKeywordOrItsPlural(tier.Keywords, tokens[index]) && !IsFrameworkTypeName(tokens, index))
+                {
+                    return tier.Tier;
+                }
             }
         }
 
         return null;
+    }
+
+    private static bool IsFrameworkTypeName(IReadOnlyList<string> tokens, int index)
+    {
+        var token = tokens[index];
+        var keyword = token.EndsWith('s') && _frameworkWordsBefore.ContainsKey(token[..^1]) ? token[..^1] : token;
+
+        return index > 0 && _frameworkWordsBefore.TryGetValue(keyword, out var wordsBefore) && wordsBefore.Contains(tokens[index - 1]);
     }
 
     private static bool IsKeywordOrItsPlural(HashSet<string> keywords, string token)
