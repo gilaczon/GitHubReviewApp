@@ -603,13 +603,10 @@ public class WebhookReceiverTests
     }
 
     [Theory]
-    [InlineData("MEMBER", HttpStatusCode.Accepted)]
-    [InlineData("owner", HttpStatusCode.Accepted)]
-    [InlineData("COLLABORATOR", HttpStatusCode.Accepted)]
-    [InlineData("FIRST_TIME_CONTRIBUTOR", HttpStatusCode.OK)]
-    [InlineData("NONE", HttpStatusCode.OK)]
-    [InlineData(null, HttpStatusCode.OK)]
-    public async Task RunAsync_GivenAnAllowListOfAuthorAssociations_Should_QueueOnlyReviewsOfTheirPullRequests(string? association, HttpStatusCode expected)
+    [InlineData("MEMBER")]
+    [InlineData("owner")]
+    [InlineData("COLLABORATOR")]
+    public async Task RunAsync_GivenAnAllowListOfAuthorAssociations_Should_QueueTheReviewOfAnAuthorOnIt(string association)
     {
         // Arrange — an opt-in control for public repositories, where anyone can open a pull request and spend model tokens
         var options = new ReviewOptions { AllowedAuthorAssociations = ["OWNER", "MEMBER", "COLLABORATOR"] };
@@ -619,8 +616,26 @@ public class WebhookReceiverTests
         var result = await BuildSut(options: options).RunAsync(request);
 
         // Assert
-        StatusOf(result).Should().Be(expected);
-        (result.QueueMessage is not null).Should().Be(expected == HttpStatusCode.Accepted);
+        StatusOf(result).Should().Be(HttpStatusCode.Accepted);
+        result.QueueMessage.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("FIRST_TIME_CONTRIBUTOR")]
+    [InlineData("NONE")]
+    [InlineData(null)]
+    public async Task RunAsync_GivenAnAllowListOfAuthorAssociations_Should_IgnoreTheReviewOfAnAuthorNotOnIt(string? association)
+    {
+        // Arrange
+        var options = new ReviewOptions { AllowedAuthorAssociations = ["OWNER", "MEMBER", "COLLABORATOR"] };
+        var request = BuildSignedPullRequestRequest(PayloadWithAssociation(association));
+
+        // Act
+        var result = await BuildSut(options: options).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
     }
 
     [Fact]
@@ -697,6 +712,37 @@ public class WebhookReceiverTests
 
         // Assert
         ((FakeHttpResponseData)result.HttpResponse).ReadBodyText().Should().Contain("needs no review");
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOffAndAnAuthorNotOnTheAllowList_Should_GiveTheAllowListsAnswer()
+    {
+        // Arrange — the switch is the last check (design 5.1, step 1), so the answers that mean "needs no review" are the same either way
+        var options = new ReviewOptions { AllowedAuthorAssociations = ["OWNER", "MEMBER", "COLLABORATOR"] };
+        var request = BuildSignedPullRequestRequest(PayloadWithAssociation("NONE"));
+
+        // Act
+        var result = await BuildSut(options: options, isReviewEnabled: false).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
+        ((FakeHttpResponseData)result.HttpResponse).ReadBodyText().Should().Be("Ignored: the pull request author is not allowed to trigger a review.");
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenReviewsSwitchedOffAndAPayloadMissingRequiredFields_Should_StillAnswerBadRequest()
+    {
+        // Arrange — a malformed payload is the sender's fault whatever the switch says
+        const string payload = "{\"action\":\"opened\",\"pull_request\":{\"number\":1,\"title\":\"t\"},\"repository\":{\"name\":\"r\",\"owner\":{\"login\":\"o\"}},\"installation\":{\"id\":1}}";
+        var request = BuildSignedPullRequestRequest(payload);
+
+        // Act
+        var result = await BuildSut(isReviewEnabled: false).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.BadRequest);
+        result.QueueMessage.Should().BeNull();
     }
 
     // ── Factory helpers ──────────────────────────────────────────────────────

@@ -117,14 +117,6 @@ public class WebhookReceiver
             return Respond(req, HttpStatusCode.OK, "Ignored: draft pull request.");
         }
 
-        // The operator's switch (design 5.11). It is read after the signature and the filters, so a forged request still gets 401 and the
-        // answers that mean "needs no review" stay as they are; what is left is a review that would have been queued.
-        if (!_runtime.Current.IsReviewEnabled)
-        {
-            _logger.LogInformation("Ignored a review request: reviews are switched off.");
-            return Respond(req, HttpStatusCode.OK, "Ignored: reviews are switched off.");
-        }
-
         // 6. A message the processor cannot act on must not be queued.
         var message = ToQueueMessage(payload);
 
@@ -140,6 +132,17 @@ public class WebhookReceiver
                 "Skipping {Owner}/{Repo}#{PrNumber}: the author's association is not in the allow-list.",
                 message.Owner, message.Repo, message.PrNumber);
             return Respond(req, HttpStatusCode.OK, "Ignored: the pull request author is not allowed to trigger a review.");
+        }
+
+        // The operator's switch (design 5.1, step 1, last). It is read after the signature, the filters, the payload check and the allow-list,
+        // so a forged request still gets 401, a malformed payload 400, and the answers that mean "needs no review" stay as they are; what is
+        // left is a review that would have been queued.
+        if (!_runtime.Current.IsReviewEnabled)
+        {
+            _logger.LogInformation(
+                "Ignored a review request for {Owner}/{Repo}#{PrNumber}: reviews are switched off.",
+                message.Owner, message.Repo, message.PrNumber);
+            return Respond(req, HttpStatusCode.OK, "Ignored: reviews are switched off.");
         }
 
         _logger.LogInformation(
