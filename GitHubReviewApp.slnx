@@ -4,5 +4,9 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/GitHubReviewApp.Tests/GitHubReviewApp.Tests.csproj" />
+    <Project Path="tests/GitHubReviewApp.ReviewPreview.Tests/GitHubReviewApp.ReviewPreview.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/GitHubReviewApp.ReviewPreview/GitHubReviewApp.ReviewPreview.csproj" />
   </Folder>
 </Solution>

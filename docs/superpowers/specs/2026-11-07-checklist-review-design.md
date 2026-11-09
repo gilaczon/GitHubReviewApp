@@ -288,6 +288,8 @@ applies the derivation in 5.7.
 - Findings: both runs' findings, stricter run first, each run's own order kept. Each finding's file is first matched to the PR's
   changed files, so a diff prefix such as `b/` is dropped; a path that matches no changed file is kept as written. A finding
   repeating the same check, file and line (file compared case-insensitively, `\` and `/` and a leading `./` normalised) counts once.
+  Across the two runs the check is not compared: the other run's finding at a file and line the stricter run already named is
+  dropped, since two runs often file one problem under different checks. Within one run, two checks at one line are both kept.
 - Summary and coverage note come from the stricter run: the one whose own result is worst (FAIL, then PASS WITH COMMENTS, then
   PASS); if tied, A.
 

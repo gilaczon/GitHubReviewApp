@@ -25,6 +25,10 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>GitHubReviewApp.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- The review preview tool (tools/GitHubReviewApp.ReviewPreview) builds the same pipeline with AddReviewPipeline. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>GitHubReviewApp.ReviewPreview</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Review\ChecklistSystemPrompt.md" LogicalName="GitHubReviewApp.Review.ChecklistSystemPrompt.md" />

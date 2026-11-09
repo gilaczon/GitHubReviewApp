@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>GitHubReviewApp.ReviewPreview</RootNamespace>
+    <!-- The Anthropic key and the Slack webhook URL are kept in user secrets (outside the repository) or in environment variables. -->
+    <UserSecretsId>github-review-app-review-preview</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The review itself is the app's own code, so a preview is exactly what the app would post. -->
+    <ProjectReference Include="..\..\src\GitHubReviewApp\GitHubReviewApp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>GitHubReviewApp.ReviewPreview.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

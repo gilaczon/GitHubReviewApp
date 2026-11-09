@@ -2,8 +2,9 @@ namespace GitHubReviewApp.Review;
 
 /// <summary>
 /// Merges the completed runs of one review into what the comment shows (design 5.7). Each check takes the stricter of the runs' ratings, and
-/// a check no run rated was not assessed. The findings come once each, the stricter run's first, and the summary and coverage note are the
-/// stricter run's: the run whose own verdict is worse, or run A, the one started first, on a tie.
+/// a check no run rated was not assessed. The findings come once each, the stricter run's first: the other run's finding at a file and line
+/// the stricter run already named is dropped, whatever check either filed it under, since two runs often file one problem under different
+/// checks. The summary and coverage note are the stricter run's: the run whose own verdict is worse, or run A, the one started first, on a tie.
 /// </summary>
 public static class ChecklistMerger
 {
@@ -79,23 +80,28 @@ public static class ChecklistMerger
 
     private static IReadOnlyList<ChecklistFinding> MergeFindings(RunAnswer stricterRun, RunAnswer? otherRun)
     {
-        var kept = new List<ChecklistFinding>();
+        var kept = new List<(ChecklistFinding Finding, bool IsFromStricterRun)>();
+        var tagged = stricterRun.Findings.Select(finding => (Finding: finding, IsFromStricterRun: true))
+            .Concat((otherRun?.Findings ?? []).Select(finding => (Finding: finding, IsFromStricterRun: false)));
 
-        foreach (var finding in stricterRun.Findings.Concat(otherRun?.Findings ?? []))
+        foreach (var (finding, isFromStricterRun) in tagged)
         {
             // The first copy is kept, so the stricter run's wins over the other's.
-            if (!kept.Any(earlier => IsRepeat(earlier, finding)))
+            if (!kept.Any(earlier => IsRepeat(earlier.Finding, finding, isAcrossRuns: earlier.IsFromStricterRun != isFromStricterRun)))
             {
-                kept.Add(finding);
+                kept.Add((finding, isFromStricterRun));
             }
         }
 
-        return kept.AsReadOnly();
+        return kept.Select(item => item.Finding).ToList().AsReadOnly();
     }
 
-    private static bool IsRepeat(ChecklistFinding earlier, ChecklistFinding finding)
+    private static bool IsRepeat(ChecklistFinding earlier, ChecklistFinding finding, bool isAcrossRuns)
     {
-        return earlier.Check == finding.Check
+        // Within one run, findings under different checks at one line are different problems. Across runs they are, almost always, one problem
+        // the two runs filed under different checks (a matched exception message as both a design and an error-handling concern), so the check
+        // is compared only within a run.
+        return (isAcrossRuns || earlier.Check == finding.Check)
             && earlier.Line == finding.Line
             && string.Equals(ComparablePath(earlier.File), ComparablePath(finding.File), StringComparison.OrdinalIgnoreCase);
     }
