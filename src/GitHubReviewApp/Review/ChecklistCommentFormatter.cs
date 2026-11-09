@@ -30,6 +30,7 @@ internal static class ChecklistCommentFormatter
     /// (<paramref name="shownFindings"/>, in the order given), what was not reviewed in full, the footer and the marker. A file a finding names
     /// is shown as the changed file <paramref name="paths"/> matches it to, or as the model wrote it when it matches none.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="context"/>.HeadSha is not 40 hex characters (see <see cref="ReviewCommentMarker.For"/>).</exception>
     public static string FormatReview(
         ReviewContext context,
         MergedReview merged,
@@ -74,6 +75,7 @@ internal static class ChecklistCommentFormatter
     /// The "Review failed" notice: no verdict, the reason, how to try again, and the footer without a model. <paramref name="reason"/> is the
     /// app's own words, one of <see cref="ReviewFailureReasons"/>, and is written as it is.
     /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="context"/>.HeadSha is not 40 hex characters (see <see cref="ReviewCommentMarker.For"/>).</exception>
     public static string FormatFailure(ReviewContext context, string reason)
     {
         var footer = $"{FormatFooterStart(context)} · at {ShortSha(context.HeadSha)}";
@@ -161,9 +163,19 @@ internal static class ChecklistCommentFormatter
     {
         var issue = Sanitize(finding.Issue, ChecklistAnswerReader.MaxIssueChars);
         var fix = Sanitize(finding.Fix, ChecklistAnswerReader.MaxFixChars);
-        var line = $"- {Icon(status)} {Checklist.Label(finding.Check)}{FormatLocation(finding, paths)}: {issue}";
+        var line = $"- {Icon(status)} {Checklist.Label(finding.Check)}{FormatLocation(finding, paths)}";
 
-        return fix.Length > 0 ? $"{line} Fix: {fix}" : line;
+        // The reader keeps a finding whose issue or fix is empty (only the check is required), so the tail is built from what there is: a colon
+        // is written only before some text, and the fix label only before a fix.
+        var tail = (issue.Length > 0, fix.Length > 0) switch
+        {
+            (true, true) => $": {issue} Fix: {fix}",
+            (true, false) => $": {issue}",
+            (false, true) => $": Fix: {fix}",
+            (false, false) => string.Empty
+        };
+
+        return line + tail;
     }
 
     private static string FormatLocation(ChecklistFinding finding, PathResolver paths)

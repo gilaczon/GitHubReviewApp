@@ -236,6 +236,24 @@ public class ChecklistCommentFormatterTests
         body.Should().NotContain("Fix:");
     }
 
+    [Theory]
+    [InlineData(Issue, "", "- ⚠️ Testing `tests/RefundClientTests.cs`: No test covers a failed POST.\n")]
+    [InlineData("", Fix, "- ⚠️ Testing `tests/RefundClientTests.cs`: Fix: Add a test for the failure path.\n")]
+    [InlineData("", "", "- ⚠️ Testing `tests/RefundClientTests.cs`\n")]
+    [InlineData(Issue, Fix, "- ⚠️ Testing `tests/RefundClientTests.cs`: No test covers a failed POST. Fix: Add a test for the failure path.\n")]
+    public void FormatReview_GivenAFindingWithAnEmptyIssueOrFix_Should_WriteNoDanglingColonOrLabel(string issue, string fix, string expectedLine)
+    {
+        // Arrange — the reader keeps a finding whose issue is empty (only the check is required), so the line is built from what there is
+        var finding = _untestedFailure with { Issue = issue, Fix = fix };
+
+        // Act
+        var body = Format(Context(), TypicalReview(), [finding]);
+
+        // Assert
+        body.Should().Contain(expectedLine);
+        body.Should().NotContain(": \n").And.NotContain(":  ");
+    }
+
     [Fact]
     public void FormatReview_GivenNoSummary_Should_LeaveOutItsLine()
     {
