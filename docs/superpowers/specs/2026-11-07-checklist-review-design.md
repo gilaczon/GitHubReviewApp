@@ -388,14 +388,20 @@ binder: `IsReviewEnabled` (true), `SonnetModel` (`claude-sonnet-5-5`), `OpusMode
 `appsettings.json`. Azure App Configuration overrides them when the `AppConfigurationConnectionString` secret is present (from Key
 Vault through TopSecret, per `/dev-appconfig-integrate`):
 - Added in `Program.cs` after `AddSecretsToConfiguration`, on the same `ConfigurationManager` (the skill's non-web bootstrap), with
-  `optional: true`, so an unreachable store at startup logs a warning and the appsettings values apply.
+  `optional: true` and a startup timeout of a few seconds (`AppConfigurationSetup.StartupTimeout`, well below GitHub's 10-second
+  webhook timeout), so an unreachable store holds a cold start only briefly and the appsettings values apply until a refresh reaches
+  it; the package logs each failed refresh ("A refresh operation failed."). A connection string the package cannot parse is never
+  added (`AppConfigurationOutcome.Invalid`): the app still starts, the appsettings values apply, and a startup warning names the
+  secret, never its value.
 - Selects only keys `GitHubReviewApp:Runtime:*` (no label), trimming `GitHubReviewApp:`, so the store can never reach the static
   settings. Refresh on the sentinel `GitHubReviewApp:Sentinel` (refresh all), every 120 seconds in Production and 30 otherwise,
-  driven by the Functions worker middleware (`Microsoft.Azure.AppConfiguration.Functions.Worker`, `UseAzureAppConfiguration()`).
+  driven by the app's own Functions worker middleware (`AppConfigurationRefreshMiddleware`, which calls `TryRefreshAsync` on each
+  refresher, as the `Microsoft.Azure.AppConfiguration.Functions.Worker` middleware does).
 - Read through a purpose-built holder, never `IOptionsMonitor` with validation: on each configuration change it parses and validates
-  the three values (model ids must look like `claude-[a-z0-9.-]+`, at most 100 characters; the switch must be a boolean) and
-  publishes an immutable snapshot only when all are valid; otherwise it keeps the last good snapshot and logs a warning. Its callback
-  never throws.
+  each of the three values on its own (model ids must look like `claude-[a-z0-9.-]+`, at most 100 characters; the switch must be a
+  boolean). A missing key takes its default; an invalid key keeps its last good value (its default at startup) and logs a warning
+  that names the key, never the value; the snapshot is published only when it changes. So a bad model id never stops the switch from
+  turning reviews off. Its callback never throws.
 - Without the secret, App Configuration is not added and the app logs that the appsettings values are in use.
 
 Secrets (Key Vault through TopSecret, unchanged): `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret`, and now the

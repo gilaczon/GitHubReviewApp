@@ -677,12 +677,14 @@ GetPullRequestAsync_GivenTheRecordedResponse_Should_ReadTheAuthorAndBranches    
 Current_GivenNoRuntimeSection_Should_UseTheDefaults
 Current_GivenValidValues_Should_ReadThem
 Current_GivenAReloadWithValidValues_Should_PublishTheNewSnapshot
-Current_GivenAReloadWithAnInvalidModelId_Should_KeepTheLastGoodSnapshotAndWarn [Theory] ("gpt-4") ("claude sonnet") ("") (101 characters)
-Current_GivenAReloadWithASwitchThatIsNotABoolean_Should_KeepTheLastGoodSnapshotAndWarn
-Current_GivenAnInvalidValueAtStartup_Should_UseTheDefaultsAndWarn
+Current_GivenAReloadWithAnInvalidModelId_Should_KeepTheLastGoodModelIdApplyTheOtherValuesAndWarn [Theory] ("gpt-4") ("claude sonnet") ("") (101 characters)
+Current_GivenAReloadWithASwitchThatIsNotABoolean_Should_KeepTheLastGoodSwitchApplyTheModelIdsAndWarn
+Current_GivenAnInvalidModelIdAtStartup_Should_UseThatKeysDefaultApplyTheOtherValuesAndWarn
+Current_GivenTheSwitchOffAndAnInvalidModelIdAtStartup_Should_SwitchReviewsOff      // fix round 1: per-key judging (design 5.11)
 Reload_GivenAnInvalidValue_Should_NotThrowFromTheChangeCallback          // Act & Assert: root.Invoking(r => r.Reload()).Should().NotThrow()
 // AppConfigurationSetupTests
-AddRuntimeAppConfiguration_GivenNoConnectionString_Should_AddNothingAndReturnFalse   // sources unchanged; no IConfigurationRefresherProvider
+AddRuntimeAppConfiguration_GivenNoConnectionString_Should_AddNothingAndReturnNotConfigured   // sources unchanged; no IConfigurationRefresherProvider
+AddRuntimeAppConfiguration_GivenAMalformedConnectionString_Should_NotThrowAddNothingAndReturnInvalid [Theory]   // fix rounds 1-2
 RefreshInterval_GivenAnEnvironment_Should_Be120SecondsInProductionAnd30Otherwise [Theory]
 // AppConfigurationRefreshMiddlewareTests
 Invoke_GivenNoRefresherProvider_Should_CallTheNextMiddleware
