@@ -10,9 +10,9 @@ public class ServiceRegistrationTests
     {
         var settings = new Dictionary<string, string?>
         {
-            ["AnthropicApiKey"] = "sk-ant-test",
-            ["GitHubAppPrivateKey"] = "pem",
-            ["GitHubWebhookSecret"] = "secret"
+            ["GitHubReviewAppAnthropicApiKey"] = "sk-ant-test",
+            ["GitHubReviewAppPrivateKey"] = "pem",
+            ["GitHubReviewAppWebhookSecret"] = "secret"
         };
 
         foreach (var pair in extra ?? [])

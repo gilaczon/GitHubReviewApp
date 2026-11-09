@@ -417,7 +417,7 @@ Vault through TopSecret, per `/dev-appconfig-integrate`):
   turning reviews off. Its callback never throws.
 - Without the secret, App Configuration is not added and the app logs that the runtime defaults (or the application settings) are in use.
 
-Secrets (Key Vault through TopSecret, unchanged): `AnthropicApiKey`, `GitHubAppPrivateKey`, `GitHubWebhookSecret`, and now the
+Secrets (Key Vault through TopSecret; named with the app as a prefix, since the vault is shared and every secret in it is read into configuration by name): `GitHubReviewAppAnthropicApiKey`, `GitHubReviewAppPrivateKey`, `GitHubReviewAppWebhookSecret`, and now the
 optional `AppConfigurationConnectionString` (the store's read-only connection string). No secret name may start with `Claude--`,
 `Review--` or `Runtime--` (they would be read as settings).
 

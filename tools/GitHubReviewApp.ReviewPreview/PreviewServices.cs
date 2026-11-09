@@ -9,7 +9,7 @@ public static class PreviewServices
     /// <summary>The secrets a preview needs, by setting name. Neither is ever printed.</summary>
     public static IReadOnlyList<string> RequiredSecretNames { get; } = [AnthropicApiKeyName, SlackWebhookPoster.WebhookUrlSettingName];
 
-    private const string AnthropicApiKeyName = "AnthropicApiKey";
+    private const string AnthropicApiKeyName = "GitHubReviewAppAnthropicApiKey";
     private const string AnthropicKeyPrefix = "sk-ant-";
 
     // The app's limit for a GitHub call (ServiceCollectionExtensions).

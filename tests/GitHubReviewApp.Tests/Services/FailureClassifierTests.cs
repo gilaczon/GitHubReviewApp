@@ -132,7 +132,7 @@ public class FailureClassifierTests
         var failingHandler = new TestHttpMessageHandler(
             (Func<HttpRequestMessage, HttpResponseMessage>)(_ => throw new HttpRequestException("connection reset")));
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["AnthropicApiKey"] = "sk-ant-test" })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubReviewAppAnthropicApiKey"] = "sk-ant-test" })
             .Build();
         var sut = new ClaudeService(new HttpClient(failingHandler), config, Options.Create(new ClaudeOptions { MaxRetries = 0 }), NullLogger<ClaudeService>.Instance);
         var act = () => sut.ReviewAsync(new ClaudeRunRequest("claude-sonnet-5-5", "s", "u"), CancellationToken.None);
@@ -266,7 +266,7 @@ public class FailureClassifierTests
 
     public static IEnumerable<object[]> PermanentExceptions()
     {
-        yield return [new InvalidOperationException("Secret 'AnthropicApiKey' is not configured.")];
+        yield return [new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured.")];
         yield return [new ArgumentException("bad argument")];
         yield return [new JsonException("bad json")];
         yield return [new NotSupportedException("nope")];

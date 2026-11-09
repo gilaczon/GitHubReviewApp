@@ -12,7 +12,7 @@ public class WebhookReceiver
     /// <summary>The size of one read from the body, which is also the most that a read can go past <see cref="MaxBodyBytes"/> before it stops.</summary>
     internal const int ReadBufferBytes = 81_920;
 
-    private const string WebhookSecretName = "GitHubWebhookSecret";
+    private const string WebhookSecretName = "GitHubReviewAppWebhookSecret";
 
     // An edit is reviewed only when it retargets the pull request: one moved onto a reviewed branch would otherwise wait for its next push.
     // A title or description edit is not, so fixing a typo does not pay for a review.

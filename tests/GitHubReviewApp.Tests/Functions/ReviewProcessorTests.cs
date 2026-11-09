@@ -67,7 +67,7 @@ public class ReviewProcessorTests
 
     public static IEnumerable<object[]> PermanentFailures()
     {
-        yield return [new InvalidOperationException("Secret 'AnthropicApiKey' is not configured.")];
+        yield return [new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured.")];
         yield return [new GitHubApiException("not found", HttpStatusCode.NotFound, false)];
         yield return [new GitHubApiException("forbidden", HttpStatusCode.Forbidden, false)];
         yield return [new JsonException("bad payload")];
@@ -412,7 +412,7 @@ public class ReviewProcessorTests
     {
         // Arrange
         var (sut, orchestrator, notifier) = BuildSut();
-        SetupOrchestratorToThrow(orchestrator, new InvalidOperationException("Secret 'AnthropicApiKey' is not configured."));
+        SetupOrchestratorToThrow(orchestrator, new InvalidOperationException("Secret 'GitHubReviewAppAnthropicApiKey' is not configured."));
 
         // Act
         await sut.RunAsync(_sampleMessage, CancellationToken.None);
@@ -420,7 +420,7 @@ public class ReviewProcessorTests
         // Assert
         notifier.Verify(n => n.NotifyFailureAsync(
             _sampleMessage,
-            It.Is<string>(reason => reason == ReviewFailureReasons.PermanentError && !reason.Contains("AnthropicApiKey")),
+            It.Is<string>(reason => reason == ReviewFailureReasons.PermanentError && !reason.Contains("GitHubReviewAppAnthropicApiKey")),
             It.IsAny<CancellationToken>()), Times.Once());
     }
 

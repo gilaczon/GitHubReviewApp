@@ -123,7 +123,7 @@ public class WebhookReceiverTests
         var act = () => BuildSut(config).RunAsync(request);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubWebhookSecret*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppWebhookSecret*");
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class WebhookReceiverTests
         var act = () => BuildSut(config).RunAsync(request);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubWebhookSecret*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppWebhookSecret*");
     }
 
     [Theory]
@@ -147,7 +147,7 @@ public class WebhookReceiverTests
     {
         // Arrange
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubWebhookSecret"] = secret })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["GitHubReviewAppWebhookSecret"] = secret })
             .Build();
         var body = BuildPullRequestPayload("opened", isDraft: false);
         var request = BuildRequest(body,
@@ -589,7 +589,7 @@ public class WebhookReceiverTests
         var act = () => BuildSut(config).RunAsync(request);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubWebhookSecret*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubReviewAppWebhookSecret*");
     }
 
     // ── Which target branches are reviewed ───────────────────────────────────
@@ -904,7 +904,7 @@ public class WebhookReceiverTests
         config ??= new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["GitHubWebhookSecret"] = TestWebhookSecret
+                ["GitHubReviewAppWebhookSecret"] = TestWebhookSecret
             })
             .Build();
 
