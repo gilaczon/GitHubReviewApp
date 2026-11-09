@@ -592,6 +592,87 @@ public class WebhookReceiverTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*GitHubWebhookSecret*");
     }
 
+    // ── Which target branches are reviewed ───────────────────────────────────
+
+    private static ReviewOptions ShippedTargetBranches()
+    {
+        return new ReviewOptions { TargetBranches = ["main", "master", "qa", "production"] };
+    }
+
+    private static string PayloadTargeting(string? baseBranch)
+    {
+        var refField = baseBranch is null ? string.Empty : $",\"ref\":\"{baseBranch}\"";
+
+        return "{\"action\":\"opened\",\"pull_request\":{\"number\":1,\"title\":\"t\",\"base\":{\"sha\":\"b\"" + refField + "},\"head\":{\"sha\":\"h\"}},"
+            + "\"repository\":{\"name\":\"r\",\"owner\":{\"login\":\"o\"}},\"installation\":{\"id\":1}}";
+    }
+
+    [Theory]
+    [InlineData("main")]
+    [InlineData("master")]
+    [InlineData("qa")]
+    [InlineData("production")]
+    [InlineData("Main")]
+    public async Task RunAsync_GivenAPullRequestIntoAListedBranch_Should_QueueTheReview(string baseBranch)
+    {
+        // Arrange
+        var request = BuildSignedPullRequestRequest(PayloadTargeting(baseBranch));
+
+        // Act
+        var result = await BuildSut(options: ShippedTargetBranches()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.Accepted);
+        result.QueueMessage.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("feature/retries")]
+    [InlineData("develop")]
+    [InlineData("main-backup")]
+    [InlineData(null)]
+    public async Task RunAsync_GivenAPullRequestIntoAnotherBranch_Should_IgnoreItWithoutQueuing(string? baseBranch)
+    {
+        // Arrange — a payload that does not name its base cannot be shown to target a listed branch
+        var request = BuildSignedPullRequestRequest(PayloadTargeting(baseBranch));
+
+        // Act
+        var result = await BuildSut(options: ShippedTargetBranches()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenATargetBranchEntryWithStrayWhitespace_Should_StillMatchTheBranch()
+    {
+        // Arrange — the validator accepts " qa ", so the receiver must read it the same way
+        var options = new ReviewOptions { TargetBranches = [" qa "] };
+        var request = BuildSignedPullRequestRequest(PayloadTargeting("qa"));
+
+        // Act
+        var result = await BuildSut(options: options).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.Accepted);
+    }
+
+    [Theory]
+    [InlineData("feature/retries")]
+    [InlineData(null)]
+    public async Task RunAsync_GivenNoTargetBranches_Should_QueuePullRequestsIntoEveryBranch(string? baseBranch)
+    {
+        // Arrange
+        var request = BuildSignedPullRequestRequest(PayloadTargeting(baseBranch));
+
+        // Act
+        var result = await BuildSut(options: new ReviewOptions()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.Accepted);
+    }
+
     // ── Who may trigger a review ─────────────────────────────────────────────
 
     private static string PayloadWithAssociation(string? association)

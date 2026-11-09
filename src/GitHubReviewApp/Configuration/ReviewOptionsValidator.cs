@@ -36,6 +36,7 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
 
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.AllowedAuthorAssociations));
         RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.HighRiskRepositories));
+        RejectListWrittenAsOneValue(failures, nameof(ReviewOptions.TargetBranches));
 
         RequireAtLeast(failures, "MaxFileBytes", options.MaxFileBytes, MinimumFileBytes);
         RequireAtLeast(failures, "MaxConcurrentModelRequests", options.MaxConcurrentModelRequests, 1);
@@ -78,6 +79,17 @@ public sealed class ReviewOptionsValidator : IValidateOptions<ReviewOptions>
                 failures.Add(
                     $"Review:HighRiskRepositories has '{repository}', which is not written owner/repo, with no spaces. " +
                     "It would match no repository, so a repository that needs the stronger model would be reviewed by the other one.");
+            }
+        }
+
+        foreach (var branch in options.TargetBranches)
+        {
+            // A branch name never holds a space, so an entry with one inside, or a blank one, matches no pull request.
+            if (string.IsNullOrWhiteSpace(branch) || branch.Trim().Any(char.IsWhiteSpace))
+            {
+                failures.Add(
+                    $"Review:TargetBranches has '{branch}', which is not a branch name. " +
+                    "No pull request would ever target it, so it would review nothing it was meant to.");
             }
         }
 

@@ -63,6 +63,20 @@ public sealed class ReviewOptions
     public string[] AllowedAuthorAssociations { get; init; } = [];
 
     /// <summary>
+    /// When not empty, only pull requests that would merge into one of these branches are reviewed automatically; one into any other branch is
+    /// ignored by the webhook. Compared without regard to letter case. Empty means every branch.
+    /// </summary>
+    public string[] TargetBranches { get; init; } = [];
+
+    /// <summary>The target branches as they are compared: trimmed, without blanks or repeats.</summary>
+    public IReadOnlyList<string> EffectiveTargetBranches =>
+        TargetBranches
+            .Where(branch => !string.IsNullOrWhiteSpace(branch))
+            .Select(branch => branch.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
     /// The allow list as it is compared: trimmed, upper case, without blanks or repeats. The validator and the webhook receiver both read it
     /// this way, so an entry the validator accepts is an entry the receiver matches.
     /// </summary>

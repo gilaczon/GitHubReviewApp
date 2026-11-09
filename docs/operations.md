@@ -104,6 +104,7 @@ The settings, each with the value the shipped `appsettings.json` gives it (or no
 | `Review:HighRiskRepositories` | one entry, `MoneyMeTeam/Moneyme.Global.Library.VueApp` | Repositories, written `owner/repo`, that always count as a high-risk area, for a repository whose name does not say what it holds. See below. |
 | `Review:MaxConcurrentModelRequests` | 12 | Section 1. |
 | `Review:MaxReviewDurationSeconds` | 1200 | Section 3. |
+| `Review:TargetBranches` | `main`, `master`, `qa`, `production` | Only pull requests that would merge into one of these branches are reviewed; the webhook ignores one into any other branch (answering 200, "targets a branch that is not reviewed"). Compared without regard to letter case. An empty list reviews every branch. Change it in `appsettings.json`, as for `Review:HighRiskRepositories` below. A pull request whose target is changed to a listed branch is reviewed at its next push. |
 | `Review:AllowedAuthorAssociations` | not set | Whose pull requests are reviewed. The default is every author (the app logs a warning about that at start outside Development): set it on any repository you do not control. |
 | `Claude:Effort` | `high` | The effort level sent with every run. Leave it empty to omit it. |
 | `Claude:MaxOutputTokens` | 32000 | The output cap of one run, thinking included. |
@@ -111,7 +112,7 @@ The settings, each with the value the shipped `appsettings.json` gives it (or no
 | `Claude:IsRefusalFallbackEnabled` | true | A run that the asked model declines is answered by the model Anthropic picks for that refusal, in the same call. Off, a refusal ends the run. |
 | `Claude:Pricing` | five models | What each model charges per million tokens (input, output, cache write, cache read), which puts a cost on every review. A model that is missing gives "cost unknown" and a warning, never a guess: add a model here whenever you point a `Runtime:*Model` setting at one that is not listed or the provider falls back to one. |
 
-To change or drop the seeded `Review:HighRiskRepositories` entry, edit `appsettings.json`: a list is written one entry per item. An
+To change or drop the seeded `Review:HighRiskRepositories` entry (or a `Review:TargetBranches` entry, which works the same way), edit `appsettings.json`: a list is written one entry per item. An
 application setting cannot replace or remove it, because the app reads `appsettings.json` after the application settings and the file wins
 on a shared key. As an application setting an entry is `Review__HighRiskRepositories__0`, `Review__HighRiskRepositories__1` and so on:
 `__0` is ignored while the file has an entry 0, and `__1` and up add entries at indexes the file does not use. The same holds for every key

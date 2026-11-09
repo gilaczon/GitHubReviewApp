@@ -126,6 +126,14 @@ public class WebhookReceiver
             return Respond(req, HttpStatusCode.BadRequest, "Payload is missing required fields.");
         }
 
+        if (!IsTargetBranchReviewed(payload.PullRequest?.Base?.Ref))
+        {
+            _logger.LogInformation(
+                "Skipping {Owner}/{Repo}#{PrNumber}: it targets a branch that is not reviewed.",
+                message.Owner, message.Repo, message.PrNumber);
+            return Respond(req, HttpStatusCode.OK, "Ignored: the pull request targets a branch that is not reviewed.");
+        }
+
         if (!IsAuthorAllowed(payload.PullRequest?.AuthorAssociation))
         {
             _logger.LogInformation(
@@ -219,6 +227,19 @@ public class WebhookReceiver
         return hasEverythingAReviewNeeds
             ? new ReviewQueueMessage(owner, repo, pullRequest.Number, pullRequest.Title ?? string.Empty, pullRequest.Base?.Sha ?? string.Empty, headSha, installation.Id)
             : null;
+    }
+
+    private bool IsTargetBranchReviewed(string? baseBranch)
+    {
+        var branches = _options.EffectiveTargetBranches;
+
+        if (branches.Count == 0)
+        {
+            return true;
+        }
+
+        // With a list set, a payload that does not name the base branch cannot be shown to target one on it.
+        return baseBranch is not null && branches.Contains(baseBranch.Trim(), StringComparer.OrdinalIgnoreCase);
     }
 
     private bool IsAuthorAllowed(string? authorAssociation)
