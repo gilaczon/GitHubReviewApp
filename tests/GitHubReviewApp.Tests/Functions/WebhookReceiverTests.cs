@@ -644,6 +644,60 @@ public class WebhookReceiverTests
         result.QueueMessage.Should().BeNull();
     }
 
+    private static string EditedPayload(string baseBranch, string changes)
+    {
+        return "{\"action\":\"edited\",\"changes\":" + changes + ",\"pull_request\":{\"number\":1,\"title\":\"t\",\"base\":{\"sha\":\"b\",\"ref\":\""
+            + baseBranch + "\"},\"head\":{\"sha\":\"h\"}},\"repository\":{\"name\":\"r\",\"owner\":{\"login\":\"o\"}},\"installation\":{\"id\":1}}";
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenAPullRequestRetargetedOntoAListedBranch_Should_QueueTheReview()
+    {
+        // Arrange — moved from develop onto main: without this it would wait for its next push
+        const string baseChange = """{"base":{"ref":{"from":"develop"},"sha":{"from":"a"}}}""";
+        var request = BuildSignedPullRequestRequest(EditedPayload("main", baseChange));
+
+        // Act
+        var result = await BuildSut(options: ShippedTargetBranches()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.Accepted);
+        result.QueueMessage.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenAPullRequestRetargetedOntoAnotherBranch_Should_IgnoreIt()
+    {
+        // Arrange
+        const string baseChange = """{"base":{"ref":{"from":"main"},"sha":{"from":"a"}}}""";
+        var request = BuildSignedPullRequestRequest(EditedPayload("develop", baseChange));
+
+        // Act
+        var result = await BuildSut(options: ShippedTargetBranches()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"title":{"from":"Old title"}}""")]
+    [InlineData("""{"body":{"from":"Old description"}}""")]
+    [InlineData("""{"base":null}""")]
+    [InlineData("{}")]
+    public async Task RunAsync_GivenAnEditThatDoesNotRetarget_Should_IgnoreIt(string changes)
+    {
+        // Arrange — fixing a title or description must not pay for a review
+        var request = BuildSignedPullRequestRequest(EditedPayload("main", changes));
+
+        // Act
+        var result = await BuildSut(options: ShippedTargetBranches()).RunAsync(request);
+
+        // Assert
+        StatusOf(result).Should().Be(HttpStatusCode.OK);
+        result.QueueMessage.Should().BeNull();
+    }
+
     [Fact]
     public async Task RunAsync_GivenATargetBranchEntryWithStrayWhitespace_Should_StillMatchTheBranch()
     {

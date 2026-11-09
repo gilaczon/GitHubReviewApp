@@ -14,6 +14,10 @@ public class WebhookReceiver
 
     private const string WebhookSecretName = "GitHubWebhookSecret";
 
+    // An edit is reviewed only when it retargets the pull request: one moved onto a reviewed branch would otherwise wait for its next push.
+    // A title or description edit is not, so fixing a typo does not pay for a review.
+    private const string EditedAction = "edited";
+
     // Actions after which the pull request's reviewable content may have changed. A draft that is marked
     // ready, and a pull request that is reopened, have nothing new to push, so they need their own entries.
     private static readonly HashSet<string> _reviewableActions = new(StringComparer.Ordinal)
@@ -105,7 +109,7 @@ public class WebhookReceiver
         }
 
         // 5. Filter to actions that need a review; skip drafts.
-        if (payload.Action is null || !_reviewableActions.Contains(payload.Action))
+        if (!NeedsReview(payload))
         {
             _logger.LogInformation("Skipping PR action={Action}.", payload.Action);
             return Respond(req, HttpStatusCode.OK, $"Ignored: action '{payload.Action}' needs no review.");
@@ -227,6 +231,12 @@ public class WebhookReceiver
         return hasEverythingAReviewNeeds
             ? new ReviewQueueMessage(owner, repo, pullRequest.Number, pullRequest.Title ?? string.Empty, pullRequest.Base?.Sha ?? string.Empty, headSha, installation.Id)
             : null;
+    }
+
+    private static bool NeedsReview(PullRequestWebhookPayload payload)
+    {
+        return payload.Action is { } action
+            && (_reviewableActions.Contains(action) || (action == EditedAction && payload.Changes?.HasBaseChanged == true));
     }
 
     private bool IsTargetBranchReviewed(string? baseBranch)
