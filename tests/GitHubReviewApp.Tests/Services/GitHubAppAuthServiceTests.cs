@@ -88,7 +88,7 @@ public class GitHubAppAuthServiceTests
     // ── Scoping ──────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetInstallationTokenAsync_GivenEveryPermissionGranted_Should_RequestPullRequestsContentsAndChecks()
+    public async Task GetInstallationTokenAsync_GivenEveryPermissionGranted_Should_RequestPullRequestsAndChecksOnly()
     {
         // Arrange
         string? capturedBody = null;
@@ -107,9 +107,8 @@ public class GitHubAppAuthServiceTests
         body.GetProperty("repositories").EnumerateArray().Select(e => e.GetString()).Should().Equal(TestRepository);
         var permissions = body.GetProperty("permissions");
         permissions.GetProperty("pull_requests").GetString().Should().Be("write");
-        permissions.GetProperty("contents").GetString().Should().Be("read");
         permissions.GetProperty("checks").GetString().Should().Be("write");
-        permissions.EnumerateObject().Should().HaveCount(3, "nothing beyond what the review needs may be requested");
+        permissions.EnumerateObject().Should().HaveCount(2, "nothing beyond what the review needs may be requested, and it reads no repository contents");
     }
 
     [Fact]
@@ -141,7 +140,6 @@ public class GitHubAppAuthServiceTests
         retryPermissions.GetProperty("pull_requests").GetString().Should().Be("write");
         retryPermissions.EnumerateObject().Should().ContainSingle("the retry asks for pull requests alone");
         sut.CanWriteChecks(TestInstallationId, TestRepository).Should().BeFalse();
-        sut.CanReadContents(TestInstallationId, TestRepository).Should().BeFalse();
     }
 
     [Fact]
@@ -166,7 +164,7 @@ public class GitHubAppAuthServiceTests
     [Theory]
     [InlineData("{\"message\":\"There is at least one repository that does not exist or is not accessible to the parent installation.\"}")]
     [InlineData("")]
-    public async Task GetInstallationTokenAsync_GivenA422ThatIsNotAboutPermissions_Should_ThrowWithoutRetryingBecauseDroppingContentsCannotHelp(string body)
+    public async Task GetInstallationTokenAsync_GivenA422ThatIsNotAboutPermissions_Should_ThrowWithoutRetryingBecauseDroppingChecksCannotHelp(string body)
     {
         // Arrange — GitHub also answers 422 for a repository the installation cannot reach
         var handler = new TestHttpMessageHandler(req => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity) { Content = new StringContent(body) });
@@ -178,58 +176,6 @@ public class GitHubAppAuthServiceTests
         // Assert
         (await act.Should().ThrowAsync<GitHubApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         handler.Requests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task CanReadContents_GivenATokenIssuedWithoutTheContentsPermission_Should_BeFalse()
-    {
-        // Arrange
-        var handler = new TestHttpMessageHandler(async req =>
-        {
-            var body = await req.Content!.ReadAsStringAsync();
-
-            return body.Contains("\"contents\"", StringComparison.Ordinal)
-                ? new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
-                {
-                    Content = new StringContent("{\"message\":\"The permissions requested are not granted to this installation.\"}")
-                }
-                : BuildInstallationTokenResponse("ghs_without_contents", InAnHour);
-        });
-        var sut = BuildSut(handler);
-        await sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
-
-        // Act
-        var result = sut.CanReadContents(TestInstallationId, TestRepository);
-
-        // Assert
-        result.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task CanReadContents_GivenATokenIssuedWithTheContentsPermission_Should_BeTrue()
-    {
-        // Arrange
-        var sut = BuildSut(new TestHttpMessageHandler(req => BuildInstallationTokenResponse("ghs_full", InAnHour)));
-        await sut.GetInstallationTokenAsync(TestInstallationId, TestRepository, CancellationToken.None);
-
-        // Act
-        var result = sut.CanReadContents(TestInstallationId, TestRepository);
-
-        // Assert
-        result.Should().BeTrue();
-    }
-
-    [Fact]
-    public void CanReadContents_GivenNoTokenWasFetchedYet_Should_BeTrueBecauseNothingSaysOtherwise()
-    {
-        // Arrange
-        var sut = BuildSut(new TestHttpMessageHandler("{}"));
-
-        // Act
-        var result = sut.CanReadContents(TestInstallationId, TestRepository);
-
-        // Assert
-        result.Should().BeTrue();
     }
 
     [Fact]

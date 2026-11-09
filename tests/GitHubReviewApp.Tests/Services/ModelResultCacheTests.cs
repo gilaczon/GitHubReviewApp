@@ -1,14 +1,18 @@
 namespace GitHubReviewApp.Tests.Services;
 
-public class ChunkResultCacheTests
+public class ModelResultCacheTests
 {
-    private static ClaudeReviewResult Result(ChunkOutcome outcome = ChunkOutcome.Completed, string summary = "summary")
+    private static readonly ClaudeRunRequest _request = new("claude-sonnet-5-5", "system", "user");
+
+    private static ClaudeRunResult Result(RunOutcome outcome = RunOutcome.Completed, string summary = "summary")
     {
-        return new ClaudeReviewResult(outcome, summary, [], "claude-test", ClaudeUsage.Empty);
+        var answer = outcome == RunOutcome.Completed ? new RunAnswer(new Dictionary<CheckId, RatedCheck>(), [], summary, string.Empty) : null;
+
+        return new ClaudeRunResult(outcome, answer, "claude-sonnet-5-5", []);
     }
 
     // Entries key-1, key-2 and so on, each stored one second after the one before it.
-    private static void AddOneEntryPerSecond(ChunkResultCache cache, FakeTimeProvider time, int count)
+    private static void AddOneEntryPerSecond(ModelResultCache cache, FakeTimeProvider time, int count)
     {
         foreach (var number in Enumerable.Range(1, count))
         {
@@ -21,7 +25,7 @@ public class ChunkResultCacheTests
     public void Find_GivenACompletedResultThatWasStored_Should_ReturnIt()
     {
         // Arrange
-        var sut = new ChunkResultCache(new FakeTimeProvider());
+        var sut = new ModelResultCache(new FakeTimeProvider());
         var stored = Result(summary: "kept");
         sut.Add("key", stored);
 
@@ -36,7 +40,7 @@ public class ChunkResultCacheTests
     public void Find_GivenNothingStoredForTheKey_Should_ReturnNull()
     {
         // Arrange
-        var sut = new ChunkResultCache(new FakeTimeProvider());
+        var sut = new ModelResultCache(new FakeTimeProvider());
         sut.Add("other", Result());
 
         // Act
@@ -47,14 +51,14 @@ public class ChunkResultCacheTests
     }
 
     [Theory]
-    [InlineData(ChunkOutcome.OutputTruncated)]
-    [InlineData(ChunkOutcome.Refused)]
-    [InlineData(ChunkOutcome.InvalidOutput)]
-    [InlineData(ChunkOutcome.Rejected)]
-    public void Add_GivenAResultThatDidNotComplete_Should_NotKeepItBecauseARetryMayDoBetter(ChunkOutcome outcome)
+    [InlineData(RunOutcome.OutputTruncated)]
+    [InlineData(RunOutcome.Refused)]
+    [InlineData(RunOutcome.InvalidOutput)]
+    [InlineData(RunOutcome.Rejected)]
+    public void Add_GivenAResultThatDidNotComplete_Should_NotKeepItBecauseARetryMayDoBetter(RunOutcome outcome)
     {
         // Arrange
-        var sut = new ChunkResultCache(new FakeTimeProvider());
+        var sut = new ModelResultCache(new FakeTimeProvider());
 
         // Act
         sut.Add("key", Result(outcome));
@@ -68,7 +72,7 @@ public class ChunkResultCacheTests
     {
         // Arrange
         var time = new FakeTimeProvider();
-        var sut = new ChunkResultCache(time);
+        var sut = new ModelResultCache(time);
         sut.Add("key", Result());
 
         // Act
@@ -83,7 +87,7 @@ public class ChunkResultCacheTests
     {
         // Arrange — an answer for a prompt that has not been asked for an hour may belong to a branch that has long moved on
         var time = new FakeTimeProvider();
-        var sut = new ChunkResultCache(time);
+        var sut = new ModelResultCache(time);
         sut.Add("key", Result());
 
         // Act
@@ -99,7 +103,7 @@ public class ChunkResultCacheTests
     {
         // Arrange — 64 entries is the limit; add 70, one second apart
         var time = new FakeTimeProvider();
-        var sut = new ChunkResultCache(time);
+        var sut = new ModelResultCache(time);
 
         // Act
         AddOneEntryPerSecond(sut, time, count: 70);
@@ -114,7 +118,7 @@ public class ChunkResultCacheTests
     {
         // Arrange
         var time = new FakeTimeProvider();
-        var sut = new ChunkResultCache(time);
+        var sut = new ModelResultCache(time);
         sut.Add("key", Result(summary: "old"));
         time.Advance(TimeSpan.FromMinutes(50));
         sut.Add("key", Result(summary: "new"));
@@ -125,20 +129,46 @@ public class ChunkResultCacheTests
 
         // Assert
         found.Should().NotBeNull();
-        found!.Summary.Should().Be("new");
+        found!.Answer!.Summary.Should().Be("new");
     }
 
     [Fact]
-    public void KeyFor_GivenTheSamePromptsTwice_Should_BeStable()
+    public void KeyFor_GivenTheSameRequestAndRunIndexTwice_Should_BeStable()
     {
         // Arrange
-        var first = ChunkResultCache.KeyFor("system", "user");
+        var first = ModelResultCache.KeyFor(_request, 0);
 
         // Act
-        var second = ChunkResultCache.KeyFor("system", "user");
+        var second = ModelResultCache.KeyFor(_request with { }, 0);
 
         // Assert
         first.Should().Be(second);
+    }
+
+    [Fact]
+    public void KeyFor_GivenTheSameRequestAndDifferentRunIndexes_Should_Differ()
+    {
+        // Arrange — the two runs of a review send the same request, and each must keep its own answer
+        var first = ModelResultCache.KeyFor(_request, 0);
+
+        // Act
+        var second = ModelResultCache.KeyFor(_request, 1);
+
+        // Assert
+        first.Should().NotBe(second);
+    }
+
+    [Fact]
+    public void KeyFor_GivenADifferentModel_Should_Differ()
+    {
+        // Arrange — an answer from Sonnet is not the answer Opus was asked for
+        var sonnet = ModelResultCache.KeyFor(_request, 0);
+
+        // Act
+        var opus = ModelResultCache.KeyFor(_request with { Model = "claude-opus-5-5" }, 0);
+
+        // Assert
+        sonnet.Should().NotBe(opus);
     }
 
     [Theory]
@@ -148,12 +178,12 @@ public class ChunkResultCacheTests
     public void KeyFor_GivenADifferentPromptOrTextMovedAcrossTheBoundary_Should_NotCollide(string systemA, string userA, string systemB, string userB)
     {
         // Arrange
-        var keyA = ChunkResultCache.KeyFor(systemA, userA);
+        var keyA = ModelResultCache.KeyFor(_request with { SystemPrompt = systemA, UserMessage = userA }, 0);
 
         // Act
-        var keyB = ChunkResultCache.KeyFor(systemB, userB);
+        var keyB = ModelResultCache.KeyFor(_request with { SystemPrompt = systemB, UserMessage = userB }, 0);
 
-        // Assert — a changed guideline or diff must never find a stale answer
+        // Assert — a changed prompt or diff must never find a stale answer
         keyA.Should().NotBe(keyB);
     }
 }

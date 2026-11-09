@@ -31,14 +31,15 @@ internal static class AppMeters
             description: "Input tokens written to the prompt cache");
 
     /// <summary>
-    /// Tagged <c>coverage</c>: full, partial (something readable was not read) or none (a review was posted but not one file was reviewed,
-    /// which an operator should treat as a failure of the model rather than a success).
+    /// Reviews whose result was published. Tagged <c>result</c>: pass, pass_with_comments, fail, or review_failed (no run gave an answer, and
+    /// "Review failed" was published); <c>runs</c>: the model runs that completed, 1 or 2, and 0 for review_failed; and <c>coverage</c>: full,
+    /// partial (something readable was not read) or none (no diff was sent, which an operator should treat as a failure rather than a success).
     /// </summary>
     internal static readonly Counter<long> ReviewsProcessed =
         _meter.CreateCounter<long>(
             "github_review_app.reviews.processed",
             unit: "reviews",
-            description: "Number of reviews posted");
+            description: "Number of reviews whose result was published");
 
     /// <summary>Failed attempts. Tagged <c>kind</c> = transient (will be retried), permanent (gave up) or exhausted (the retries ran out).</summary>
     internal static readonly Counter<long> ReviewsFailed =
@@ -81,6 +82,37 @@ internal static class AppMeters
             unit: "runs",
             description: "Checklist runs, by how they ended and the model that answered");
 
+    /// <summary>
+    /// Published reviews whose two runs did not agree. Tagged <c>kind</c>: checks (at least one check rated differently, or rated by one run only)
+    /// or verdict (the runs' own verdicts differ). A review whose verdicts differ is counted under both.
+    /// </summary>
+    internal static readonly Counter<long> ReviewDisagreements =
+        _meter.CreateCounter<long>(
+            "github_review_app.review.disagreements",
+            unit: "reviews",
+            description: "Published reviews whose two runs disagreed, by what they disagreed on");
+
+    /// <summary>The eight checks of every published review, after merging. Tagged <c>check</c> with the check's id and <c>status</c> (pass, concern, fail, na).</summary>
+    internal static readonly Counter<long> CheckStatuses =
+        _meter.CreateCounter<long>(
+            "github_review_app.review.check_status",
+            unit: "checks",
+            description: "Checks of published reviews, by check and merged status");
+
+    /// <summary>Concerns flagged serious in published reviews, after merging.</summary>
+    internal static readonly Counter<long> SeriousFlags =
+        _meter.CreateCounter<long>(
+            "github_review_app.review.serious",
+            unit: "checks",
+            description: "Serious concerns in published reviews");
+
+    /// <summary>The model chosen for each finished review. Tagged <c>tier</c> (sonnet or opus) and <c>reason</c> (high_risk, low_risk or small_change).</summary>
+    internal static readonly Counter<long> ModelChoices =
+        _meter.CreateCounter<long>(
+            "github_review_app.review.model_choice",
+            unit: "reviews",
+            description: "Model chosen for finished reviews, by tier and reason");
+
     /// <summary>Tagged <c>reason</c> with the <see cref="Models.ReviewSkipReason"/> name.</summary>
     internal static readonly Counter<long> ReviewsSkipped =
         _meter.CreateCounter<long>(
@@ -119,7 +151,17 @@ internal static class AppMeters
     private static readonly double[] _reviewDurationBucketsMilliseconds =
         [5_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_200_000, 1_800_000];
 
-    /// <summary>Tagged <c>outcome</c>: posted, skipped, retry (a transient failure), failed or interrupted.</summary>
+    /// <summary>
+    /// What one finished review cost in US dollars, both runs together, each attempt at its own model's price. Tagged <c>tier</c> (sonnet or opus). A
+    /// review with a run whose cost is not known (a model missing from <c>Claude:Pricing</c>, or a run that failed outright) is not recorded.
+    /// </summary>
+    internal static readonly Histogram<double> ReviewCost =
+        _meter.CreateHistogram<double>(
+            "github_review_app.review.cost",
+            unit: "USD",
+            description: "Cost of finished reviews in US dollars");
+
+    /// <summary>Tagged <c>outcome</c>: posted, review_failed, skipped, retry (a transient failure), failed or interrupted.</summary>
     internal static readonly Histogram<double> ReviewDuration =
         _meter.CreateHistogram<double>(
             "github_review_app.review.duration",

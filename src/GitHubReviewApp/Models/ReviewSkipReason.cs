@@ -12,7 +12,7 @@ public enum ReviewSkipReason
     /// <summary>A review for this exact commit already exists (webhook redelivery or retry).</summary>
     AlreadyReviewed = 3,
 
-    /// <summary>Every changed file was deleted, so there is no new code to review.</summary>
+    /// <summary>GitHub listed no changed files, so there is nothing to review.</summary>
     NothingToReview = 4,
 
     /// <summary>This process is already reviewing this exact commit; that run posts the review.</summary>

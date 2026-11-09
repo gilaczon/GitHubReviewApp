@@ -9,14 +9,9 @@ public interface IGitHubAppAuthService
     Task<string> GetInstallationTokenAsync(long installationId, string repository, CancellationToken cancellationToken);
 
     /// <summary>
-    /// False when the token cached for this repository was issued without the contents permission, because the installation was never granted
-    /// it. GitHub answers "not found" to a private repository's file in that case, so a missing guidelines file cannot be told from a hidden one.
-    /// </summary>
-    bool CanReadContents(long installationId, string repository);
-
-    /// <summary>
-    /// False when the token cached for this repository was issued without the checks permission, because the installation was never granted it.
-    /// A check run is then not attempted: GitHub would refuse it, and the comment alone still carries the result. True when no token is cached.
+    /// False when the token cached for this repository was issued without the checks permission, because the installation was never granted it:
+    /// Checks is the only permission the token request drops. A check run is then not attempted: GitHub would refuse it, and the comment alone
+    /// still carries the result. True when no token is cached, so fetch the token first.
     /// </summary>
     bool CanWriteChecks(long installationId, string repository);
 

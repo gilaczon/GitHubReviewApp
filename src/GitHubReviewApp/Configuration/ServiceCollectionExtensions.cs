@@ -44,14 +44,13 @@ internal static class ServiceCollectionExtensions
         }
 
         // Stateless review logic.
-        services.AddSingleton<ReviewPlanner>();
-        services.AddSingleton<ReviewAggregator>();
-        services.AddSingleton<ReviewFormatter>();
+        services.AddSingleton<ReviewInputBuilder>();
+        services.AddSingleton<ModelSelector>();
 
         // Shared by every review this process runs, so each is a singleton: they are how concurrent reviews coordinate.
         services.AddSingleton<ReviewInFlightRegistry>();
         services.AddSingleton<ModelRequestLimiter>();
-        services.AddSingleton<ChunkResultCache>();
+        services.AddSingleton<ModelResultCache>();
 
         // Transient, because they depend on typed HTTP clients: a singleton would pin one client (and its
         // connection pool) for the life of the process and never notice DNS changes.

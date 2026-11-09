@@ -64,6 +64,8 @@ public class ReviewProcessor
                     "Skipping review of {Owner}/{Repo}#{PrNumber}: reviews are switched off.",
                     message.Owner, message.Repo, message.PrNumber);
 
+                // Counted here: the orchestrator, which counts every other skip, never sees this one.
+                AppMeters.ReviewsSkipped.Add(1, new KeyValuePair<string, object?>("reason", ReviewSkipReason.SwitchedOff.ToString()));
                 activity?.SetTag("review.skipped_reason", ReviewSkipReason.SwitchedOff.ToString());
                 activity?.SetStatus(ActivityStatusCode.Ok);
                 outcome = "skipped";
@@ -75,11 +77,22 @@ public class ReviewProcessor
             if (result.Status == ReviewRunStatus.Posted)
             {
                 _logger.LogInformation(
-                    "Review posted for {Owner}/{Repo}#{PrNumber}: {FilesReviewed} files, {FindingCount} findings, partial: {IsPartial}.",
-                    message.Owner, message.Repo, message.PrNumber, result.FilesReviewed, result.FindingCount, result.IsPartial);
+                    "Review posted for {Owner}/{Repo}#{PrNumber}: {Verdict} from {RunCount} runs, {IncludedFileCount} files, partial: {IsPartial}.",
+                    message.Owner, message.Repo, message.PrNumber, result.Verdict, result.RunCount, result.IncludedFileCount, result.IsPartial);
 
-                AppMeters.ReviewsProcessed.Add(1, new KeyValuePair<string, object?>("coverage", DescribeCoverage(result)));
+                CountProcessed(result);
                 outcome = "posted";
+            }
+            else if (result.Status == ReviewRunStatus.Failed)
+            {
+                // Neither run gave an answer for a reason a retry would not change, and the author has been told so. The app worked as designed,
+                // so this is no failure of the processor: it is counted with the reviews, as one whose result is review_failed.
+                _logger.LogInformation(
+                    "Review failed published for {Owner}/{Repo}#{PrNumber}: neither model run gave an answer.",
+                    message.Owner, message.Repo, message.PrNumber);
+
+                CountProcessed(result);
+                outcome = "review_failed";
             }
             else
             {
@@ -157,9 +170,18 @@ public class ReviewProcessor
         }
     }
 
+    private static void CountProcessed(ReviewRunResult result)
+    {
+        AppMeters.ReviewsProcessed.Add(
+            1,
+            new KeyValuePair<string, object?>("result", ReviewRecordLog.ResultText(result.Verdict)),
+            new KeyValuePair<string, object?>("runs", result.RunCount.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, object?>("coverage", DescribeCoverage(result)));
+    }
+
     private static string DescribeCoverage(ReviewRunResult result)
     {
-        if (result.FilesReviewed == 0)
+        if (result.IncludedFileCount == 0)
         {
             return "none";
         }

@@ -55,15 +55,18 @@ public sealed class ReviewOptions
     /// <summary>How many Claude requests run at once for a multi-part review.</summary>
     public int MaxParallelChunks { get; init; } = 3;
 
-    /// <summary>How many Claude requests this process has in flight at once, across every review it is running.</summary>
-    public int MaxConcurrentModelRequests { get; init; } = 6;
+    /// <summary>
+    /// How many Claude requests this process has in flight at once, across every review it is running. Each review runs two at once, so 12 lets
+    /// the six reviews an instance takes from the queue run without waiting for one another.
+    /// </summary>
+    public int MaxConcurrentModelRequests { get; init; } = 12;
 
     /// <summary>
     /// The longest one review may take from start to finish, GitHub calls, model requests and the wait for a free model slot included. When it runs out the
-    /// work is cancelled and the message is retried, with the parts that did finish kept. It exists so that a review is ended by the app and not by the
+    /// work is cancelled and the message is retried, with a run that did finish kept. It exists so that a review is ended by the app and not by the
     /// Functions host: when the host's own timeout fires, it restarts the worker, which takes every other review the instance is running with it. The host's
-    /// timeout must therefore be longer than this, and this at least as long as <c>Claude:RequestTimeoutSeconds</c>. A review of the largest size is
-    /// at most two waves of three parts (<see cref="MaxParallelChunks"/>), so twice that request time is the longest it needs.
+    /// timeout must therefore be longer than this, and this at least as long as <c>Claude:RequestTimeoutSeconds</c>. The two runs of a review are
+    /// sent at once, so twice that request time leaves the other half for a wait behind other reviews for a model slot.
     /// </summary>
     public int MaxReviewDurationSeconds { get; init; } = 1_200;
 

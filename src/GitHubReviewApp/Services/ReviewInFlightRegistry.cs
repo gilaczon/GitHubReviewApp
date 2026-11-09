@@ -3,7 +3,7 @@ namespace GitHubReviewApp.Services;
 /// <summary>
 /// Remembers which commits this process is reviewing right now. A reopen, a draft toggle or a redelivery queues another message for a
 /// commit that is already being reviewed, and without this each would pay for the same review and post a duplicate. It covers one process
-/// only; the check of the review list just before posting is what catches a second instance.
+/// only; the check of the pull request's comments just before publishing is what catches a second instance.
 /// </summary>
 public sealed class ReviewInFlightRegistry
 {

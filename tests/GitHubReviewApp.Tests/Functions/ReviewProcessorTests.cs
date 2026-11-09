@@ -22,7 +22,7 @@ public class ReviewProcessorTests
         var orchestrator = new Mock<IReviewOrchestrator>();
         orchestrator
             .Setup(o => o.ReviewPullRequestAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(result ?? ReviewRunResult.Posted(2, 1, false));
+            .ReturnsAsync(result ?? ReviewRunResult.Posted(ReviewVerdict.PassWithComments, 2, 2, false));
 
         var notifier = new Mock<IReviewFailureNotifier>();
         notifier
@@ -93,11 +93,11 @@ public class ReviewProcessorTests
     [InlineData(2, false, "full")]
     [InlineData(2, true, "partial")]
     [InlineData(0, true, "none")]
-    public async Task RunAsync_GivenAPostedReview_Should_CountItAsProcessedAndTagHowMuchOfThePullRequestItCovered(int filesReviewed, bool isPartial, string coverage)
+    public async Task RunAsync_GivenAPostedReview_Should_CountItAsProcessedAndTagHowMuchOfThePullRequestItCovered(int includedFileCount, bool isPartial, string coverage)
     {
         // Arrange — a review that reviewed nothing is posted, but it is not a success an operator should count as one
         using var metrics = new MetricsRecorder();
-        var (sut, _, _) = BuildSut(ReviewRunResult.Posted(filesReviewed, 1, isPartial));
+        var (sut, _, _) = BuildSut(ReviewRunResult.Posted(ReviewVerdict.Pass, 2, includedFileCount, isPartial));
 
         // Act
         await sut.RunAsync(_sampleMessage, CancellationToken.None);
@@ -106,6 +106,49 @@ public class ReviewProcessorTests
         metrics.Sum("github_review_app.reviews.processed", ("coverage", coverage)).Should().Be(1);
         metrics.Sum("github_review_app.reviews.processed").Should().Be(1);
         metrics.Sum("github_review_app.reviews.failed").Should().Be(0);
+    }
+
+    public static IEnumerable<object[]> FinishedReviews()
+    {
+        yield return [ReviewRunResult.Posted(ReviewVerdict.Pass, 2, 2, false), "pass", "2"];
+        yield return [ReviewRunResult.Posted(ReviewVerdict.PassWithComments, 1, 2, false), "pass_with_comments", "1"];
+        yield return [ReviewRunResult.Posted(ReviewVerdict.Fail, 2, 2, false), "fail", "2"];
+        yield return [ReviewRunResult.Failed(), "review_failed", "0"];
+    }
+
+    [Theory]
+    [MemberData(nameof(FinishedReviews))]
+    public async Task RunAsync_GivenAFinishedReview_Should_CountItAsProcessedTaggedWithItsResultAndCompletedRuns(
+        ReviewRunResult runResult, string expectedResult, string expectedRuns)
+    {
+        // Arrange
+        using var metrics = new MetricsRecorder();
+        var (sut, _, notifier) = BuildSut(runResult);
+
+        // Act
+        await sut.RunAsync(_sampleMessage, CancellationToken.None);
+
+        // Assert
+        metrics.Sum("github_review_app.reviews.processed", ("result", expectedResult), ("runs", expectedRuns)).Should().Be(1);
+        metrics.Sum("github_review_app.reviews.processed").Should().Be(1);
+        metrics.Sum("github_review_app.reviews.failed").Should().Be(0, "a review that ended as Review failed has already told the author");
+        notifier.Verify(n => n.NotifyFailureAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never());
+    }
+
+    [Fact]
+    public async Task RunAsync_GivenAReviewThatFailed_Should_LogItAndMarkTheSpanOk()
+    {
+        // Arrange — the review ran and its "Review failed" result was published, which is the app working as designed
+        using var spans = new SpanRecorder(ActivitySources.ReviewProcessorName);
+        var logger = new ListLogger<ReviewProcessor>();
+        var (sut, _, _) = BuildSut(ReviewRunResult.Failed(), logger: logger);
+
+        // Act
+        await sut.RunAsync(_sampleMessage, CancellationToken.None);
+
+        // Assert
+        spans.Spans.Should().ContainSingle().Which.Status.Should().Be(ActivityStatusCode.Ok);
+        logger.Entries.Should().Contain(entry => entry.Level == LogLevel.Information && entry.Message.Contains("Review failed", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -147,6 +190,7 @@ public class ReviewProcessorTests
         span.Status.Should().Be(ActivityStatusCode.Ok);
         metrics.Sum("github_review_app.reviews.processed").Should().Be(0);
         metrics.Sum("github_review_app.reviews.failed").Should().Be(0);
+        metrics.Sum("github_review_app.reviews.skipped", ("reason", "SwitchedOff")).Should().Be(1);
         metrics.Has("github_review_app.review.duration", ("outcome", "skipped")).Should().BeTrue();
     }
 
@@ -178,7 +222,7 @@ public class ReviewProcessorTests
         orchestrator
             .Setup(o => o.ReviewPullRequestAsync(It.IsAny<ReviewQueueMessage>(), It.IsAny<CancellationToken>()))
             .Callback(() => time.Advance(TimeSpan.FromMilliseconds(1_500)))
-            .ReturnsAsync(ReviewRunResult.Posted(2, 1, false));
+            .ReturnsAsync(ReviewRunResult.Posted(ReviewVerdict.Pass, 2, 2, false));
 
         // Act
         await sut.RunAsync(_sampleMessage, CancellationToken.None);
@@ -187,15 +231,16 @@ public class ReviewProcessorTests
         metrics.Sum("github_review_app.review.duration", ("outcome", "posted")).Should().Be(1_500);
     }
 
-    public static IEnumerable<object[]> SkippedAndPostedRuns()
+    public static IEnumerable<object[]> SkippedPostedAndFailedRuns()
     {
         yield return [ReviewRunResult.Skipped(ReviewSkipReason.Draft), "skipped"];
-        yield return [ReviewRunResult.Posted(1, 0, false), "posted"];
+        yield return [ReviewRunResult.Posted(ReviewVerdict.Pass, 2, 1, false), "posted"];
+        yield return [ReviewRunResult.Failed(), "review_failed"];
     }
 
     [Theory]
-    [MemberData(nameof(SkippedAndPostedRuns))]
-    public async Task RunAsync_GivenAReviewThatWasSkippedOrPosted_Should_TagTheDurationWithThatOutcome(ReviewRunResult runResult, string expectedOutcome)
+    [MemberData(nameof(SkippedPostedAndFailedRuns))]
+    public async Task RunAsync_GivenAReviewThatWasSkippedPostedOrFailed_Should_TagTheDurationWithThatOutcome(ReviewRunResult runResult, string expectedOutcome)
     {
         // Arrange
         using var metrics = new MetricsRecorder();

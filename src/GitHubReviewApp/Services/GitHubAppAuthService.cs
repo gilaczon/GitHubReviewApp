@@ -41,7 +41,7 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         _logger = logger;
     }
 
-    private record CachedToken(string Token, DateTimeOffset ExpiresAt, bool HasContentsAccess, bool HasChecksAccess)
+    private record CachedToken(string Token, DateTimeOffset ExpiresAt, bool HasChecksAccess)
     {
         public bool IsValidAt(DateTimeOffset now) => now < ExpiresAt;
     }
@@ -85,14 +85,6 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         }
 
         return token.Token;
-    }
-
-    public bool CanReadContents(long installationId, string repository)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-
-        // With no token cached there is nothing to say the permission is missing.
-        return !_tokenCache.TryGetValue((installationId, repository.ToLowerInvariant()), out var cached) || cached.HasContentsAccess;
     }
 
     public bool CanWriteChecks(long installationId, string repository)
@@ -192,12 +184,12 @@ public class GitHubAppAuthService : IGitHubAppAuthService
             "Exchanging JWT for an access token for installation {InstallationId}, repository {Repository}.",
             installationId, repository);
 
-        var response = await SendTokenRequestAsync(installationId, repository, jwt, hasEveryPermission: true, cancellationToken);
-        var hasAllAccess = true;
+        var response = await SendTokenRequestAsync(installationId, repository, jwt, hasChecksPermission: true, cancellationToken);
+        var hasChecksAccess = true;
 
         // GitHub answers 422 when a requested permission was never granted to the installation, and also when the repository is not available
-        // to it. Only the first is worth retrying with pull request access alone: the comment needs nothing more. Contents and checks are
-        // both left out, so the token says it cannot read guidelines and cannot write a check run.
+        // to it. Only the first is worth retrying with pull request access alone: the comment needs nothing more. Checks, the only other
+        // permission requested, is the one dropped, so the token says it cannot write a check run.
         if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
         {
             var rejection = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -214,11 +206,11 @@ public class GitHubAppAuthService : IGitHubAppAuthService
 
             _logger.LogWarning(
                 "Installation {InstallationId} has not been granted every permission requested ({Reason}). " +
-                "Requesting a token with pull request access only; repository review guidelines will not be read and no check run will be created.",
+                "Requesting a token without the Checks permission; no check run will be created, and the comment still carries the result.",
                 installationId, rejection.ReplaceLineEndings(" ").Trim());
 
-            response = await SendTokenRequestAsync(installationId, repository, jwt, hasEveryPermission: false, cancellationToken);
-            hasAllAccess = false;
+            response = await SendTokenRequestAsync(installationId, repository, jwt, hasChecksPermission: false, cancellationToken);
+            hasChecksAccess = false;
         }
 
         using (response)
@@ -231,7 +223,7 @@ public class GitHubAppAuthService : IGitHubAppAuthService
             var body = await response.Content.ReadFromJsonAsync<InstallationTokenResponse>(cancellationToken)
                 ?? throw new InvalidOperationException("Empty installation token response.");
 
-            return new CachedToken(body.Token, body.ExpiresAt - _tokenRefreshMargin, hasAllAccess, hasAllAccess);
+            return new CachedToken(body.Token, body.ExpiresAt - _tokenRefreshMargin, hasChecksAccess);
         }
     }
 
@@ -239,14 +231,15 @@ public class GitHubAppAuthService : IGitHubAppAuthService
         long installationId,
         string repository,
         string jwt,
-        bool hasEveryPermission,
+        bool hasChecksPermission,
         CancellationToken cancellationToken)
     {
+        // The review reads the pull request and its files and writes one comment (pull requests), and creates a check run (checks). It reads no
+        // repository contents, so it does not ask for them.
         var permissions = new Dictionary<string, string> { ["pull_requests"] = "write" };
 
-        if (hasEveryPermission)
+        if (hasChecksPermission)
         {
-            permissions["contents"] = "read";
             permissions["checks"] = "write";
         }
 

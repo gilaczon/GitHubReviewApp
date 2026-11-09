@@ -106,22 +106,20 @@ public class ServiceRegistrationTests
         using var provider = BuildProvider();
 
         // Act
-        var planners = (provider.GetRequiredService<ReviewPlanner>(), provider.GetRequiredService<ReviewPlanner>());
-        var aggregators = (provider.GetRequiredService<ReviewAggregator>(), provider.GetRequiredService<ReviewAggregator>());
-        var formatters = (provider.GetRequiredService<ReviewFormatter>(), provider.GetRequiredService<ReviewFormatter>());
+        var builders = (provider.GetRequiredService<ReviewInputBuilder>(), provider.GetRequiredService<ReviewInputBuilder>());
+        var selectors = (provider.GetRequiredService<ModelSelector>(), provider.GetRequiredService<ModelSelector>());
         var auth = (provider.GetRequiredService<IGitHubAppAuthService>(), provider.GetRequiredService<IGitHubAppAuthService>());
 
         // Assert
-        planners.Item1.Should().BeSameAs(planners.Item2);
-        aggregators.Item1.Should().BeSameAs(aggregators.Item2);
-        formatters.Item1.Should().BeSameAs(formatters.Item2);
+        builders.Item1.Should().BeSameAs(builders.Item2);
+        selectors.Item1.Should().BeSameAs(selectors.Item2);
         auth.Item1.Should().BeSameAs(auth.Item2, "the token cache lives in this service and must be shared");
     }
 
     [Theory]
     [InlineData(typeof(ReviewInFlightRegistry))]
     [InlineData(typeof(ModelRequestLimiter))]
-    [InlineData(typeof(ChunkResultCache))]
+    [InlineData(typeof(ModelResultCache))]
     public void AddReviewPipeline_GivenTheServicesConcurrentReviewsCoordinateThrough_Should_RegisterEachAsASingleton(Type serviceType)
     {
         // Arrange — a transient copy would give every review its own limiter, registry and cache, and nothing would be shared between reviews
@@ -147,7 +145,7 @@ public class ServiceRegistrationTests
         var first = provider.GetRequiredService<ModelRequestLimiter>();
         var second = provider.GetRequiredService<ModelRequestLimiter>();
         var registries = (provider.GetRequiredService<ReviewInFlightRegistry>(), provider.GetRequiredService<ReviewInFlightRegistry>());
-        var caches = (provider.GetRequiredService<ChunkResultCache>(), provider.GetRequiredService<ChunkResultCache>());
+        var caches = (provider.GetRequiredService<ModelResultCache>(), provider.GetRequiredService<ModelResultCache>());
 
         // Assert
         first.Should().BeSameAs(second);

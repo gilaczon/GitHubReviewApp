@@ -1,22 +1,31 @@
 namespace GitHubReviewApp.Services;
 
 /// <summary>
-/// Reviews one queued pull request end to end. It checks the pull request is still worth reviewing, plans
-/// which files go to the model, runs the requests (in parallel when the change is large), merges the results,
-/// re-checks that the commit is still the head, and posts one review tied to that commit.
+/// Reviews one queued pull request against MoneyMe's Code Review Checklist (design 5.1, step 3). It checks the pull request is still worth
+/// reviewing and has not been reviewed at this commit, builds the review input, runs the review twice in parallel on the chosen model, merges the
+/// two checklists, checks again that the commit is still the head and still unreviewed, and publishes a check run and then the comment, which is
+/// the pull request's record of the review. When no run gives an answer, it publishes "Review failed" the same way, or rethrows a failure that a
+/// retry may clear up (design 5.12).
 /// </summary>
 public sealed class ReviewOrchestrator : IReviewOrchestrator
 {
+    private const int RunsPerReview = 2;
+    private const string FailedCheckRunTitle = "Review failed";
+    private const string TransientFailureOutcome = "transient_failure";
+    private const string PermanentFailureOutcome = "permanent_failure";
+
     private readonly IGitHubAppAuthService _auth;
     private readonly IGitHubService _github;
     private readonly IClaudeService _claude;
-    private readonly ReviewPlanner _planner;
-    private readonly ReviewAggregator _aggregator;
-    private readonly ReviewFormatter _formatter;
+    private readonly ReviewInputBuilder _inputBuilder;
+    private readonly ModelSelector _modelSelector;
+    private readonly ReviewPublisher _publisher;
     private readonly ReviewInFlightRegistry _inFlight;
     private readonly ModelRequestLimiter _limiter;
-    private readonly ChunkResultCache _cache;
+    private readonly ModelResultCache _cache;
+    private readonly IRuntimeSettings _runtime;
     private readonly ReviewOptions _options;
+    private readonly ClaudeOptions _claudeOptions;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ReviewOrchestrator> _logger;
 
@@ -24,72 +33,48 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         IGitHubAppAuthService auth,
         IGitHubService github,
         IClaudeService claude,
-        ReviewPlanner planner,
-        ReviewAggregator aggregator,
-        ReviewFormatter formatter,
+        ReviewInputBuilder inputBuilder,
+        ModelSelector modelSelector,
+        ReviewPublisher publisher,
         ReviewInFlightRegistry inFlight,
         ModelRequestLimiter limiter,
-        ChunkResultCache cache,
+        ModelResultCache cache,
+        IRuntimeSettings runtime,
         IOptions<ReviewOptions> options,
+        IOptions<ClaudeOptions> claudeOptions,
         TimeProvider timeProvider,
         ILogger<ReviewOrchestrator> logger)
     {
         _auth = auth;
         _github = github;
         _claude = claude;
-        _planner = planner;
-        _aggregator = aggregator;
-        _formatter = formatter;
+        _inputBuilder = inputBuilder;
+        _modelSelector = modelSelector;
+        _publisher = publisher;
         _inFlight = inFlight;
         _limiter = limiter;
         _cache = cache;
+        _runtime = runtime;
         _options = options.Value;
+        _claudeOptions = claudeOptions.Value;
         _timeProvider = timeProvider;
         _logger = logger;
     }
 
-    private sealed record ChunkRun(ClaudeReviewResult[] Results, ReviewSkipReason? StopReason);
-
-    /// <summary>The first failure among parts that are running side by side, kept so the parts still running are not cancelled because of it.</summary>
-    private sealed class FirstFailure
+    /// <summary>How one run ended: with a result, or with the failure it threw. Exactly one of the two is set.</summary>
+    private sealed record RunEnding(int Index, ClaudeRunResult? Run, Exception? Failure)
     {
-        private Exception? _exception;
-
-        public bool HasFailed => Volatile.Read(ref _exception) is not null;
-
-        public void Record(Exception exception)
-        {
-            Interlocked.CompareExchange(ref _exception, exception, null);
-        }
-
-        public void ThrowIfAny()
-        {
-            if (Volatile.Read(ref _exception) is { } exception)
-            {
-                ExceptionDispatchInfo.Capture(exception).Throw();
-            }
-        }
+        public bool IsCompleted => Run?.Outcome == RunOutcome.Completed;
     }
 
-    private sealed class StopSignal
-    {
-        private int _reason = -1;
-
-        public ReviewSkipReason? Reason => Volatile.Read(ref _reason) is var value and >= 0 ? (ReviewSkipReason)value : null;
-
-        public bool IsRaised => Volatile.Read(ref _reason) >= 0;
-
-        public void Raise(ReviewSkipReason reason)
-        {
-            Interlocked.CompareExchange(ref _reason, (int)reason, -1);
-        }
-    }
+    /// <summary>What a finished review publishes, and what its record says about it. The merge and the outcome are null for "Review failed".</summary>
+    private sealed record Publication(string Body, CheckRunRequest CheckRun, MergedReview? Merged, ReviewOutcome? Outcome);
 
     public async Task<ReviewRunResult> ReviewPullRequestAsync(ReviewQueueMessage message, CancellationToken cancellationToken)
     {
         // One limit for the whole review, whatever it is waiting on: GitHub, the model, or its turn for a model slot behind other reviews. Without
         // it a review that stalls runs until the Functions host gives up on the invocation, which restarts the worker and takes every other
-        // review the instance is running with it, and loses the finished parts that a retry could have reused.
+        // review the instance is running with it, and loses the finished runs that a retry could have reused.
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(_options.MaxReviewDurationSeconds), _timeProvider);
         using var limited = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
 
@@ -100,106 +85,11 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         catch (Exception exception) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Our own limit ran out (the host did not cancel), however the cancellation surfaced. Like a slow model it is worth another try, and
-            // the parts that did finish are kept for it.
+            // a run that did finish is kept for it.
             throw new TimeoutException(
                 $"The review of {message.Owner}/{message.Repo}#{message.PrNumber} did not finish within the {_options.MaxReviewDurationSeconds}-second limit.",
                 exception);
         }
-    }
-
-    private async Task<ReviewRunResult> RunReviewAsync(ReviewQueueMessage message, CancellationToken cancellationToken)
-    {
-        var token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
-        var appLogin = await _auth.GetAppLoginAsync(cancellationToken);
-
-        var pullRequest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-
-        if (GetSkipReason(pullRequest, message.HeadSha) is { } skipReason)
-        {
-            return Skip(message, skipReason);
-        }
-
-        var reviews = await _github.ListReviewsAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-
-        // Only this app's own review of this very commit counts: anyone can post a review quoting the marker,
-        // and a forged marker must not be able to suppress the review of a commit.
-        if (ReviewHistory.HasCompletedReview(reviews, pullRequest.HeadSha, appLogin))
-        {
-            return Skip(message, ReviewSkipReason.AlreadyReviewed);
-        }
-
-        // Another message for this commit may already be running in this process (a reopen, a draft toggle, a redelivery). That run posts
-        // the review, and this one would only pay for the same work and post it twice.
-        using var lease = _inFlight.TryBegin(message.Owner, message.Repo, message.PrNumber, pullRequest.HeadSha);
-
-        if (lease is null)
-        {
-            return Skip(message, ReviewSkipReason.InProgress);
-        }
-
-        var files = await _github.GetPullRequestFilesAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-        var plan = _planner.CreatePlan(files);
-        TagPlan(plan);
-
-        // Silence is right only when there is no new code at all. Anything else the reviewer could not read still gets a coverage
-        // report, because a pull request that gets no response looks exactly like an app that is down.
-        if (plan.SkippedFiles.All(skipped => skipped.Reason == FileSkipReason.Deleted) && !plan.HasReviewableContent)
-        {
-            RecordPlan(pullRequest, plan);
-            return Skip(message, ReviewSkipReason.NothingToReview);
-        }
-
-        var guidelines = await ReadGuidelinesAsync(message, pullRequest, plan, token, cancellationToken);
-        var run = await ReviewChunksAsync(message, plan, pullRequest, guidelines, cancellationToken);
-
-        if (run.StopReason is { } stopReason)
-        {
-            _logger.LogInformation(
-                "Stopped reviewing {Owner}/{Repo}#{PrNumber} before every part was reviewed: {Reason}.",
-                message.Owner, message.Repo, message.PrNumber, stopReason);
-            return Skip(message, stopReason);
-        }
-
-        ThrowWhenEveryPartWasRejected(message, run.Results);
-
-        var report = _aggregator.Aggregate(plan, run.Results) with { HasUnreadableGuidelines = guidelines.IsUnreadable };
-
-        // The model can take minutes and the token was fetched before it started. Ask again: a token still in the cache comes back as it was,
-        // and one that would have expired during the run is replaced.
-        token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
-
-        // If the branch moved on meanwhile, this review describes a stale commit and the newer commit has its own queued review.
-        var latest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-
-        if (GetSkipReason(latest, message.HeadSha) is { } staleReason)
-        {
-            _logger.LogInformation(
-                "Discarding a finished review of {Owner}/{Repo}#{PrNumber}: {Reason}.",
-                message.Owner, message.Repo, message.PrNumber, staleReason);
-            return Skip(message, staleReason);
-        }
-
-        // Another message for this commit (a reopen, a redelivery, a second instance) may have posted its review while the
-        // model was working, so read the reviews again rather than trusting the list from before.
-        var currentReviews = await _github.ListReviewsAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-
-        if (ReviewHistory.HasCompletedReview(currentReviews, pullRequest.HeadSha, appLogin))
-        {
-            _logger.LogInformation(
-                "Not posting a second review of {Owner}/{Repo}#{PrNumber}: another run already reviewed this commit.",
-                message.Owner, message.Repo, message.PrNumber);
-            return Skip(message, ReviewSkipReason.AlreadyReviewed);
-        }
-
-        await DeletePendingReviewsAsync(message, token, ReviewHistory.OwnPendingReviews(currentReviews, appLogin), cancellationToken);
-
-        // No model ran when nothing could be read, and the review says so rather than naming one.
-        var model = plan.HasReviewableContent
-            ? run.Results.Select(result => result.Model).FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "claude"
-            : null;
-        await PostReviewAsync(message, token, pullRequest, plan, report, model, cancellationToken);
-
-        return RecordOutcome(pullRequest, plan, report);
     }
 
     private static ReviewSkipReason? GetSkipReason(PullRequestInfo pullRequest, string expectedHeadSha)
@@ -222,6 +112,164 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         return null;
     }
 
+    /// <summary>
+    /// The failure to rethrow when no run completed, or null when both runs ended without an answer but without throwing. One that a retry may
+    /// clear up comes first: a retry may well complete both runs. Then one that cannot, which the processor reports at once (design 5.12).
+    /// </summary>
+    private static Exception? FailureToRethrow(IReadOnlyList<RunEnding> endings)
+    {
+        var failures = endings.Select(ending => ending.Failure).OfType<Exception>().ToList();
+
+        return failures.FirstOrDefault(FailureClassifier.IsTransient) ?? failures.FirstOrDefault();
+    }
+
+    /// <summary>What "Review failed" says when both runs ended without an answer: what both ended with, or that neither finished when they differ.</summary>
+    private static string FailureReason(IReadOnlyList<RunEnding> endings)
+    {
+        var outcomes = endings.Select(ending => ending.Run!.Outcome).Distinct().ToList();
+
+        if (outcomes.Count != 1)
+        {
+            return ReviewFailureReasons.NoneFinished;
+        }
+
+        return outcomes[0] switch
+        {
+            RunOutcome.Refused => ReviewFailureReasons.AllRefused,
+            RunOutcome.OutputTruncated => ReviewFailureReasons.AllTruncated,
+            RunOutcome.InvalidOutput => ReviewFailureReasons.AllInvalid,
+            RunOutcome.Rejected => ReviewFailureReasons.AllRejected,
+            _ => throw new UnreachableException($"A run that ended {outcomes[0]} is not a run that ended without an answer.")
+        };
+    }
+
+    private static CheckRunConclusion ConclusionFor(ReviewVerdict verdict)
+    {
+        return verdict switch
+        {
+            ReviewVerdict.Pass => CheckRunConclusion.Success,
+            ReviewVerdict.PassWithComments => CheckRunConclusion.Neutral,
+            ReviewVerdict.Fail => CheckRunConclusion.Failure,
+            _ => throw new UnreachableException($"The verdict {verdict} has no check run conclusion.")
+        };
+    }
+
+    /// <summary>The model that answered a run, or the one asked for when the result names none.</summary>
+    private static string AnsweringModel(ClaudeRunResult result, ModelChoice choice)
+    {
+        return string.IsNullOrWhiteSpace(result.Model) ? choice.Model : result.Model;
+    }
+
+    /// <summary>
+    /// The answer with each finding's file matched to the changed file it names, so that the merge counts <c>src/Foo.cs</c> and <c>b/src/Foo.cs</c>
+    /// as one file. A file that matches no changed file keeps the model's text.
+    /// </summary>
+    private static RunAnswer WithResolvedPaths(RunAnswer answer, PathResolver paths)
+    {
+        var findings = answer.Findings.Select(finding => finding with { File = paths.Resolve(finding.File) ?? finding.File }).ToList();
+
+        return answer with { Findings = findings.AsReadOnly() };
+    }
+
+    private async Task<ReviewRunResult> RunReviewAsync(ReviewQueueMessage message, CancellationToken cancellationToken)
+    {
+        var startedAt = _timeProvider.GetTimestamp();
+        var token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
+        var appLogin = await _auth.GetAppLoginAsync(cancellationToken);
+        var pullRequest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
+
+        if (GetSkipReason(pullRequest, message.HeadSha) is { } skipReason)
+        {
+            return Skip(message, skipReason);
+        }
+
+        // The record is this pull request's own comment (design 5.2): another pull request on the same commit has its own diff and its own review.
+        // Only a comment by this app counts, since anyone can paste the marker into a comment of their own.
+        var comments = await _github.ListIssueCommentsAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
+
+        if (ReviewRecord.HasReviewed(comments, appLogin, pullRequest.HeadSha))
+        {
+            return Skip(message, ReviewSkipReason.AlreadyReviewed);
+        }
+
+        // Another message for this commit may already be running in this process (a reopen, a draft toggle, a redelivery). That run publishes the
+        // review, and this one would only pay for the same work.
+        using var lease = _inFlight.TryBegin(message.Owner, message.Repo, message.PrNumber, pullRequest.HeadSha);
+
+        if (lease is null)
+        {
+            return Skip(message, ReviewSkipReason.InProgress);
+        }
+
+        var files = await _github.GetPullRequestFilesAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
+
+        if (files.Count == 0)
+        {
+            return Skip(message, ReviewSkipReason.NothingToReview);
+        }
+
+        var input = _inputBuilder.Build(message.Owner, message.Repo, pullRequest, files);
+
+        // The runtime settings in force as the review starts: a change an operator makes applies from the next review, never to half of this one.
+        var choice = _modelSelector.Choose(message.Owner, message.Repo, pullRequest, input, _runtime.Current);
+        var request = new ClaudeRunRequest(choice.Model, ChecklistPrompt.SystemPrompt, input.UserMessage);
+
+        var endings = await Task.WhenAll(Enumerable.Range(0, RunsPerReview).Select(index => EndRunAsync(message, request, index, cancellationToken)));
+
+        if (!endings.Any(ending => ending.IsCompleted) && FailureToRethrow(endings) is { } failure)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
+        LogFailedRuns(message, endings);
+
+        // GitHub lists at most 3,000 of a pull request's files. The ones it did not list were not reviewed either.
+        var unlistedCount = Math.Max(0, pullRequest.ChangedFileCount - files.Count);
+        var paths = new PathResolver(files);
+        var context = BuildContext(message, pullRequest, input, unlistedCount, endings, choice);
+        var publication = endings.Any(ending => ending.IsCompleted)
+            ? BuildReview(message, context, endings, paths)
+            : BuildFailure(message, context, FailureReason(endings));
+
+        // The model can take minutes and the token was fetched before it started. Ask again: a token still in the cache comes back as it was, and
+        // one that would have expired during the runs is replaced. It also says whether the installation granted Checks, which is asked next.
+        token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
+
+        // If the pull request was closed, turned into a draft or moved on meanwhile, this review describes a commit nobody is waiting on, and a
+        // newer commit has its own queued review.
+        var latest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
+
+        if (GetSkipReason(latest, message.HeadSha) is { } staleReason)
+        {
+            _logger.LogInformation(
+                "Discarding a finished review of {Owner}/{Repo}#{PrNumber}: {Reason}.",
+                message.Owner, message.Repo, message.PrNumber, staleReason);
+            return Skip(message, staleReason);
+        }
+
+        // Another instance may have published its review of this commit while the model was working, so the comments are read again.
+        var currentComments = await _github.ListIssueCommentsAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
+
+        if (ReviewRecord.HasReviewed(currentComments, appLogin, pullRequest.HeadSha))
+        {
+            _logger.LogInformation(
+                "Not publishing a second review of {Owner}/{Repo}#{PrNumber}: another run already reviewed this commit.",
+                message.Owner, message.Repo, message.PrNumber);
+            return Skip(message, ReviewSkipReason.AlreadyReviewed);
+        }
+
+        var canWriteChecks = _auth.CanWriteChecks(message.InstallationId, message.Repo);
+
+        await _publisher.PublishAsync(
+            message, token, appLogin, currentComments, publication.Body, publication.CheckRun, canWriteChecks, cancellationToken);
+
+        RecordFinishedReview(message, pullRequest, input, unlistedCount, choice, endings, publication, startedAt);
+
+        return publication.Outcome is { } outcome
+            ? ReviewRunResult.Posted(outcome.Verdict, publication.Merged!.RunCount, input.IncludedFileCount, IsPartial(input, unlistedCount))
+            : ReviewRunResult.Failed();
+    }
+
     private ReviewRunResult Skip(ReviewQueueMessage message, ReviewSkipReason reason)
     {
         _logger.LogInformation(
@@ -233,333 +281,234 @@ public sealed class ReviewOrchestrator : IReviewOrchestrator
         return ReviewRunResult.Skipped(reason);
     }
 
-    private async Task<RepositoryGuidelines> ReadGuidelinesAsync(
-        ReviewQueueMessage message,
-        PullRequestInfo pullRequest,
-        ReviewPlan plan,
-        string token,
-        CancellationToken cancellationToken)
-    {
-        if (!plan.HasReviewableContent)
-        {
-            return RepositoryGuidelines.None;
-        }
-
-        if (!_auth.CanReadContents(message.InstallationId, message.Repo))
-        {
-            _logger.LogInformation(
-                "The installation has no access to the contents of {Owner}/{Repo}, so its review guidelines are not read.",
-                message.Owner, message.Repo);
-            return RepositoryGuidelines.Unreadable;
-        }
-
-        // Read from the base commit, never the pull request: its author must not be able to rewrite the rules.
-        return await _github.GetRepositoryGuidelinesAsync(message.Owner, message.Repo, pullRequest.BaseSha, token, cancellationToken);
-    }
-
-    private async Task<ChunkRun> ReviewChunksAsync(
-        ReviewQueueMessage message,
-        ReviewPlan plan,
-        PullRequestInfo pullRequest,
-        RepositoryGuidelines guidelines,
-        CancellationToken cancellationToken)
-    {
-        var results = new ClaudeReviewResult[plan.Chunks.Count];
-
-        if (plan.Chunks.Count == 0)
-        {
-            return new ChunkRun(results, null);
-        }
-
-        var systemPrompt = ReviewPromptBuilder.BuildSystemPrompt(guidelines.Text);
-        var stop = new StopSignal();
-        var transientFailure = new FirstFailure();
-
-        // Cancelled when the commit turns out to have been replaced, so that the parts still being written stop being paid for.
-        using var replaced = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        // Is this part still worth a request? Asked of each part twice: when it is picked up, from what is already known, and again once it has its
-        // slot, because the wait for one can take minutes when reviews share the instance and what was true when the part was queued may not be true
-        // when its turn comes. Only this second time is the pull request looked at, so that a part is not sent on the strength of an old answer.
-        async Task<bool> IsStillWorthStartingAsync(CancellationToken slotToken)
-        {
-            if (stop.IsRaised || transientFailure.HasFailed)
-            {
-                return false;
-            }
-
-            if (plan.Chunks.Count > 1 && await FindNewerCommitAsync(message, slotToken) is { } moved)
-            {
-                stop.Raise(moved);
-                await replaced.CancelAsync();
-                return false;
-            }
-
-            return true;
-        }
-
-        try
-        {
-            await Parallel.ForEachAsync(
-                Enumerable.Range(0, plan.Chunks.Count),
-                new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = Math.Max(1, _options.MaxParallelChunks),
-                    CancellationToken = replaced.Token
-                },
-                async (index, chunkToken) =>
-                {
-                    // A part that has not started is not worth paying for once the commit has been replaced, and not worth starting once another part
-                    // has failed in a way a retry can clear up: its request would probably meet the same rate limit or outage, and the retry runs it.
-                    if (stop.IsRaised || transientFailure.HasFailed)
-                    {
-                        return;
-                    }
-
-                    try
-                    {
-                        var userMessage = ReviewPromptBuilder.BuildUserMessage(pullRequest, plan.Chunks[index], plan.Chunks.Count);
-
-                        if (await ReviewChunkAsync(systemPrompt, userMessage, IsStillWorthStartingAsync, chunkToken) is { } result)
-                        {
-                            results[index] = result;
-                        }
-                    }
-                    catch (OperationCanceledException) when (stop.IsRaised && !cancellationToken.IsCancellationRequested)
-                    {
-                        // This part was cancelled because the commit was replaced. Nothing went wrong with it.
-                    }
-                    catch (Exception exception) when (
-                        !chunkToken.IsCancellationRequested && FailureClassifier.IsTransient(exception))
-                    {
-                        // A failure that can clear up does not cancel the parts still running: they are paid for, and what they finish is kept for the
-                        // retry. One that cannot clear up is not caught, so it cancels them and is what surfaces.
-                        transientFailure.Record(exception);
-                    }
-                });
-        }
-        catch (OperationCanceledException) when (stop.IsRaised && !cancellationToken.IsCancellationRequested)
-        {
-            // The loop itself was cancelled because the commit was replaced.
-        }
-
-        // A replaced commit outranks a failure that a retry would clear up: the retry would only find the newer commit and skip, after the wait.
-        if (stop.Reason is { } reason)
-        {
-            return new ChunkRun(results, reason);
-        }
-
-        transientFailure.ThrowIfAny();
-
-        return new ChunkRun(results, null);
-    }
-
-    private static void ThrowWhenEveryPartWasRejected(ReviewQueueMessage message, ClaudeReviewResult[] results)
-    {
-        if (results.Length == 0 || results.Any(result => result.Outcome != ChunkOutcome.Rejected))
-        {
-            return;
-        }
-
-        // Nothing was read and the same requests would be refused again, so this is a failed review, not a partial one. A coverage report saying so
-        // for every pull request would hide a wrong model name or an empty account behind what looks like normal output. Some parts refused is
-        // different: a part too large for the service says nothing about the others, and that review is still posted.
-        throw new AiServiceRejectedRequestException(
-            $"The AI service rejected all {results.Length} request(s) for {message.Owner}/{message.Repo}#{message.PrNumber}: {results[0].Detail}");
-    }
-
     /// <summary>
-    /// A look before a part's request is sent, to skip work that would be thrown away. It asks for the token itself, because a part can start many
-    /// minutes after the review began, and a cached token is only retired ten minutes before it expires. It never fails the part: the check before
-    /// posting is the one that matters, and it runs again. That includes a client that gave up waiting (a cancelled task that nobody cancelled):
-    /// only our own cancellation ends it.
+    /// Runs one of the review's runs and keeps what it threw, so that a failure does not cancel the other run, which is paid for and whose answer
+    /// may still give a verdict. A cancellation of the review itself, by the host or the review's own limit, is not a failure of the run and is
+    /// rethrown.
     /// </summary>
-    private async Task<ReviewSkipReason?> FindNewerCommitAsync(ReviewQueueMessage message, CancellationToken cancellationToken)
+    private async Task<RunEnding> EndRunAsync(ReviewQueueMessage message, ClaudeRunRequest request, int runIndex, CancellationToken cancellationToken)
     {
         try
         {
-            var token = await _auth.GetInstallationTokenAsync(message.InstallationId, message.Repo, cancellationToken);
-            var latest = await _github.GetPullRequestAsync(message.Owner, message.Repo, message.PrNumber, token, cancellationToken);
-
-            return GetSkipReason(latest, message.HeadSha);
+            return new RunEnding(runIndex, await RunAsync(message, request, runIndex, cancellationToken), null);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            if (exception is GitHubApiException { StatusCode: HttpStatusCode.Unauthorized })
-            {
-                // The cached token is no longer accepted. Dropped here, the check before posting asks for a new one instead of failing the same way.
-                _auth.ForgetInstallationToken(message.InstallationId, message.Repo);
-            }
-
-            _logger.LogWarning(
-                exception,
-                "Could not check whether the commit of {Owner}/{Repo}#{PrNumber} was replaced before reviewing a part; reviewing it anyway.",
-                message.Owner, message.Repo, message.PrNumber);
-
-            return null;
+            return new RunEnding(runIndex, null, exception);
         }
     }
 
-    /// <returns>The result, or null when the part was not started because <paramref name="isStillWorthStarting"/> said no once the slot was granted.</returns>
-    private async Task<ClaudeReviewResult?> ReviewChunkAsync(
-        string systemPrompt,
-        string userMessage,
-        Func<CancellationToken, Task<bool>> isStillWorthStarting,
-        CancellationToken cancellationToken)
+    private async Task<ClaudeRunResult> RunAsync(ReviewQueueMessage message, ClaudeRunRequest request, int runIndex, CancellationToken cancellationToken)
     {
-        // A part that already finished (in an earlier attempt that failed on a different part) is not paid for twice.
-        var key = ChunkResultCache.KeyFor(systemPrompt, userMessage);
+        // A run that completed in an earlier attempt of this review (one that failed later, or on the other run) is not paid for twice.
+        var key = ModelResultCache.KeyFor(request, runIndex);
 
         if (_cache.Find(key) is { } known)
         {
-            _logger.LogInformation("Reusing the finished result of a part that was already reviewed.");
+            _logger.LogInformation(
+                "Reusing run {RunIndex} of {Owner}/{Repo}#{PrNumber} from an earlier attempt.",
+                runIndex, message.Owner, message.Repo, message.PrNumber);
             return known;
         }
 
+        // Each run waits for its own slot, so the limiter counts both runs of every review the process is running.
         using (await _limiter.AcquireAsync(cancellationToken))
         {
             // A slot can be granted at the very moment the wait is cancelled. A request that is already cancelled is not worth starting.
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!await isStillWorthStarting(cancellationToken))
-            {
-                return null;
-            }
-
-            ClaudeReviewResult result;
-
-            try
-            {
-                result = await _claude.ReviewAsync(new ClaudeReviewRequest(systemPrompt, userMessage), cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                // A request that threw is counted too, or the counter would show fewer requests than were made and none of them failing. One that was
-                // cancelled is not: the model did nothing wrong.
-                AppMeters.ChunkRequests.Add(1, new KeyValuePair<string, object?>("outcome", "Failed"));
-                throw;
-            }
-
-            AppMeters.ChunkRequests.Add(1, new KeyValuePair<string, object?>("outcome", result.Outcome.ToString()));
+            var result = await _claude.ReviewAsync(request, cancellationToken);
             _cache.Add(key, result);
 
             return result;
         }
     }
 
-    private async Task DeletePendingReviewsAsync(
-        ReviewQueueMessage message,
-        string token,
-        IReadOnlyList<PullRequestReviewSummary> ownPendingReviews,
-        CancellationToken cancellationToken)
+    private void LogFailedRuns(ReviewQueueMessage message, IReadOnlyList<RunEnding> endings)
     {
-        // GitHub allows one pending review per reviewer per pull request. A draft left behind by a run that
-        // crashed would make the new review fail, so clear it first.
-        foreach (var pending in ownPendingReviews)
+        // Only reached when the other run completed, or when neither threw: the failure does not stop the review, so it is logged here.
+        foreach (var ending in endings.Where(ending => ending.Failure is not null))
         {
-            try
-            {
-                _logger.LogInformation(
-                    "Deleting pending review {ReviewId} before posting a new review for {Owner}/{Repo}#{PrNumber}.",
-                    pending.Id, message.Owner, message.Repo, message.PrNumber);
-
-                await _github.DeleteReviewAsync(message.Owner, message.Repo, message.PrNumber, pending.Id, token, cancellationToken);
-            }
-            catch (HttpRequestException exception) when (!FailureClassifier.IsTransient(exception))
-            {
-                _logger.LogWarning(exception, "Could not delete pending review {ReviewId}; trying to post anyway.", pending.Id);
-            }
-        }
-    }
-
-    private async Task PostReviewAsync(
-        ReviewQueueMessage message,
-        string token,
-        PullRequestInfo pullRequest,
-        ReviewPlan plan,
-        ReviewReport report,
-        string? model,
-        CancellationToken cancellationToken)
-    {
-        var withInline = _formatter.Format(report, plan, pullRequest, model, hasInlineComments: true);
-
-        try
-        {
-            await _github.PostReviewAsync(
-                message.Owner, message.Repo, message.PrNumber,
-                new ReviewSubmission(pullRequest.HeadSha, withInline.Body, withInline.Comments),
-                token, cancellationToken);
-        }
-        catch (GitHubApiException exception) when (
-            exception.StatusCode == HttpStatusCode.UnprocessableEntity && withInline.Comments.Count > 0)
-        {
-            // GitHub rejects the whole review if any inline comment points at a line it cannot place.
-            // Findings are valuable, so post them all in the body rather than lose the review.
             _logger.LogWarning(
-                exception,
-                "GitHub rejected the review of {Owner}/{Repo}#{PrNumber} with HTTP 422 ({Reason}); posting the findings in the review body instead.",
-                message.Owner, message.Repo, message.PrNumber, exception.Message);
-
-            var bodyOnly = _formatter.Format(report, plan, pullRequest, model, hasInlineComments: false);
-
-            await _github.PostReviewAsync(
-                message.Owner, message.Repo, message.PrNumber,
-                new ReviewSubmission(pullRequest.HeadSha, bodyOnly.Body, []),
-                token, cancellationToken);
+                ending.Failure,
+                "Run {RunIndex} of the review of {Owner}/{Repo}#{PrNumber} failed; publishing the verdict of the run that completed.",
+                ending.Index, message.Owner, message.Repo, message.PrNumber);
         }
     }
 
-    private static void TagPlan(ReviewPlan plan)
+    private static ReviewContext BuildContext(
+        ReviewQueueMessage message,
+        PullRequestInfo pullRequest,
+        ReviewInput input,
+        int unlistedCount,
+        IReadOnlyList<RunEnding> endings,
+        ModelChoice choice)
     {
-        Activity.Current?.SetTag("review.files_changed", plan.TotalFileCount);
-        Activity.Current?.SetTag("review.files_reviewed", plan.ReviewedFileCount);
-        Activity.Current?.SetTag("review.files_skipped", plan.SkippedFiles.Count);
-        Activity.Current?.SetTag("review.chunks", plan.Chunks.Count);
+        // Every file not reviewed in full: cut, left out for its size, never read, sent no diff by GitHub, or not listed by GitHub at all.
+        var leftOutCount = input.PartialFileCount + input.OverBudgetFileCount + input.NotReadFileCount + input.NoDiffFileCount + unlistedCount;
+
+        // The models that answered, run A's first, each once: two only when a refusal fallback answered one run with another model.
+        var models = endings
+            .Where(ending => ending.IsCompleted)
+            .Select(ending => AnsweringModel(ending.Run!, choice))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return new ReviewContext(
+            message.Owner,
+            message.Repo,
+            message.PrNumber,
+            pullRequest.HeadRef,
+            pullRequest.BaseRef,
+            pullRequest.AuthorLogin,
+            pullRequest.HeadSha,
+            input.Files.Count + unlistedCount,
+            pullRequest.Additions,
+            pullRequest.Deletions,
+            input.IncludedFileCount,
+            leftOutCount,
+            models.AsReadOnly());
+    }
+
+    private static bool IsPartial(ReviewInput input, int unlistedCount)
+    {
+        // Partial means something that could have been read was not read in full. A lockfile or a binary is never read, so it does not count;
+        // a file GitHub did not list does.
+        return input.PartialFileCount + input.OverBudgetFileCount + input.NoDiffFileCount + unlistedCount > 0;
+    }
+
+    private static Publication BuildReview(ReviewQueueMessage message, ReviewContext context, IReadOnlyList<RunEnding> endings, PathResolver paths)
+    {
+        var answers = endings
+            .Where(ending => ending.IsCompleted)
+            .Select(ending => WithResolvedPaths(ending.Run!.Answer!, paths))
+            .ToList();
+
+        var merged = ChecklistMerger.Merge(answers);
+        var outcome = ChecklistVerdict.Derive(merged.Checks);
+        var body = ChecklistCommentFormatter.FormatReview(context, merged, outcome, FindingSelector.SelectShown(merged), paths);
+        var checkRun = new CheckRunRequest(
+            context.HeadSha,
+            ConclusionFor(outcome.Verdict),
+            outcome.Headline,
+            ChecklistCommentFormatter.CheckRunSummary(body),
+            message.PrNumber.ToString(CultureInfo.InvariantCulture));
+
+        return new Publication(body, checkRun, merged, outcome);
+    }
+
+    private static Publication BuildFailure(ReviewQueueMessage message, ReviewContext context, string reason)
+    {
+        // The reason is the app's own words: a rejected run's detail is the AI service's text, which stays in the logs.
+        var body = ChecklistCommentFormatter.FormatFailure(context, reason);
+        var checkRun = new CheckRunRequest(
+            context.HeadSha,
+            CheckRunConclusion.Neutral,
+            FailedCheckRunTitle,
+            ChecklistCommentFormatter.CheckRunSummary(body),
+            message.PrNumber.ToString(CultureInfo.InvariantCulture));
+
+        return new Publication(body, checkRun, null, null);
     }
 
     /// <summary>
-    /// Counted when the outcome is final (a review is posted, or there was nothing to review), not when the plan is made: a plan that is discarded
-    /// because the commit was replaced is counted by the review of the new commit, and one that is retried would be counted again by every attempt.
+    /// The metrics and the review record of a published review. Counted when the result is published, not before: a review that is discarded
+    /// because the commit moved on is counted by the newer commit's review, and one that is retried would otherwise be counted by every attempt.
     /// </summary>
-    private static void RecordPlan(PullRequestInfo pullRequest, ReviewPlan plan)
+    private void RecordFinishedReview(
+        ReviewQueueMessage message,
+        PullRequestInfo pullRequest,
+        ReviewInput input,
+        int unlistedCount,
+        ModelChoice choice,
+        IReadOnlyList<RunEnding> endings,
+        Publication publication,
+        long startedAt)
     {
-        AppMeters.PullRequestChangedLines.Record(pullRequest.ChangedLineCount);
+        var runs = endings.Select(ending => ToRunRecord(ending, choice)).ToList();
 
-        foreach (var group in plan.SkippedFiles.GroupBy(skipped => skipped.Reason))
+        // A run whose cost is not known leaves the total unknown: a sum without it would read as the real cost.
+        decimal? totalCost = runs.All(run => run.Cost is not null) ? runs.Sum(run => run.Cost!.Value) : null;
+        var tier = new KeyValuePair<string, object?>("tier", ReviewRecordLog.TierText(choice));
+
+        AppMeters.ModelChoices.Add(1, tier, new KeyValuePair<string, object?>("reason", choice.Reason));
+
+        if (totalCost is { } cost)
         {
-            AppMeters.FilesSkipped.Add(group.Count(), new KeyValuePair<string, object?>("reason", group.Key.ToString()));
+            AppMeters.ReviewCost.Record((double)cost, tier);
+        }
+
+        if (publication.Merged is { } merged && publication.Outcome is { } outcome)
+        {
+            RecordVerdict(merged, outcome);
+            AppMeters.FilesReviewed.Add(input.IncludedFileCount);
+            AppMeters.PullRequestChangedLines.Record(pullRequest.ChangedLineCount);
+
+            if (IsPartial(input, unlistedCount))
+            {
+                AppMeters.ReviewsPartial.Add(1);
+            }
+        }
+
+        ReviewRecordLog.Write(
+            _logger, message, choice, runs, publication.Merged, publication.Outcome, input, totalCost, _timeProvider.GetElapsedTime(startedAt));
+    }
+
+    private static void RecordVerdict(MergedReview merged, ReviewOutcome outcome)
+    {
+        foreach (var check in merged.Checks)
+        {
+            AppMeters.CheckStatuses.Add(
+                1,
+                new KeyValuePair<string, object?>("check", Checklist.WireId(check.Id)),
+                new KeyValuePair<string, object?>("status", ReviewRecordLog.StatusText(check.Status)));
+        }
+
+        AppMeters.SeriousFlags.Add(outcome.SeriousCount);
+
+        if (merged.RunCount == RunsPerReview && !merged.IsUnanimous)
+        {
+            AppMeters.ReviewDisagreements.Add(1, new KeyValuePair<string, object?>("kind", "checks"));
+        }
+
+        if (merged.OtherRunVerdict is { } otherVerdict && otherVerdict != merged.StricterRunVerdict)
+        {
+            AppMeters.ReviewDisagreements.Add(1, new KeyValuePair<string, object?>("kind", "verdict"));
         }
     }
 
-    private static ReviewRunResult RecordOutcome(PullRequestInfo pullRequest, ReviewPlan plan, ReviewReport report)
+    private RunRecord ToRunRecord(RunEnding ending, ModelChoice choice)
     {
-        RecordPlan(pullRequest, plan);
-
-        foreach (var group in report.Findings.GroupBy(finding => finding.Severity))
+        if (ending.Run is not { } result)
         {
-            AppMeters.FindingsReported.Add(group.Count(), new KeyValuePair<string, object?>("severity", group.Key.ToString()));
+            var failureOutcome = FailureClassifier.IsTransient(ending.Failure!) ? TransientFailureOutcome : PermanentFailureOutcome;
+
+            return new RunRecord(ending.Index, failureOutcome, choice.Model, null, string.Empty, ClaudeUsage.Empty, null);
         }
 
-        var notReviewedCount = report.IncompleteChunks.Sum(chunk => chunk.FilePaths.Count);
-        var filesReviewed = plan.ReviewedFileCount - notReviewedCount;
+        var cost = CostCalculator.CostOf(result.Attempts, _claudeOptions.Pricing);
 
-        // Partial means something that could have been read was not. A lockfile or a binary is never read, so skipping one does not count.
-        var isPartial = plan.PartialFileCount > 0
-            || report.IncompleteChunks.Count > 0
-            || !plan.HasReviewableContent
-            || plan.SkippedFiles.Any(skipped => skipped.Reason is FileSkipReason.OverBudget or FileSkipReason.NoDiffAvailable);
-
-        // Counted when the review is posted, not when it is planned: a plan that is discarded or retried reviewed nothing.
-        AppMeters.FilesReviewed.Add(filesReviewed);
-
-        if (isPartial)
+        if (cost is null)
         {
-            AppMeters.ReviewsPartial.Add(1);
+            var unpriced = result.Attempts
+                .Select(attempt => attempt.Model)
+                .Where(model => !_claudeOptions.Pricing.Keys.Any(priced => string.Equals(priced, model, StringComparison.OrdinalIgnoreCase)))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            _logger.LogWarning(
+                "Claude:Pricing has no price for {Models}, so the cost of run {RunIndex} is not known.",
+                string.Join(", ", unpriced), ending.Index);
         }
 
-        Activity.Current?.SetTag("review.findings", report.Findings.Count);
-        Activity.Current?.SetTag("review.partial", isPartial);
+        var answer = ending.IsCompleted ? result.Answer : null;
 
-        return ReviewRunResult.Posted(filesReviewed, report.Findings.Count, isPartial);
+        return new RunRecord(
+            ending.Index,
+            result.Outcome.ToString(),
+            AnsweringModel(result, choice),
+            answer is null ? null : ChecklistVerdict.OwnVerdict(answer),
+            answer is null ? string.Empty : ReviewRecordLog.Statuses(answer),
+            result.TotalUsage,
+            cost);
     }
 }

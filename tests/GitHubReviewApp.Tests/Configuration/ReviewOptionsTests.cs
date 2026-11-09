@@ -75,7 +75,7 @@ public class ReviewOptionsTests
 
         // Assert
         options.AllowedAuthorAssociations.Should().BeEmpty();
-        options.MaxConcurrentModelRequests.Should().Be(6);
+        options.MaxConcurrentModelRequests.Should().Be(12);
     }
 
     [Fact]

@@ -37,7 +37,8 @@ public sealed class ReviewPublisher
         else
         {
             _logger.LogWarning(
-                "Not creating a check run for {Owner}/{Repo}#{PrNumber}: the installation has not granted the Checks permission.",
+                "Not creating a check run for {Owner}/{Repo}#{PrNumber}: the installation has not granted the Checks permission, "
+                + "so its token was issued with pull request access only.",
                 message.Owner, message.Repo, message.PrNumber);
         }
 

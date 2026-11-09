@@ -142,14 +142,13 @@ public class FunctionBindingTests
         var batchSize = queues.GetProperty("batchSize").GetInt32();
         var newBatchThreshold = queues.GetProperty("newBatchThreshold").GetInt32();
 
-        // Assert — each review can hold hundreds of KB of diff and several concurrent model requests. The trigger fetches a new batch once
+        // Assert — each review holds up to 180 KB of diff and two model requests at once. The trigger fetches a new batch once
         // newBatchThreshold messages are left, so up to batchSize + newBatchThreshold reviews run at once on one instance: 4 + 2 = 6 as shipped,
-        // which is what docs/operations.md says and what the model limiter's default of 6 slots is sized for. Changing either number is a decision
-        // to make on purpose, with that document and the limiter in view.
+        // which is what docs/operations.md says and what the model limiter's default of 12 slots is sized for. Changing either number is a
+        // decision to make on purpose, with that document and the limiter in view.
         batchSize.Should().Be(4);
         newBatchThreshold.Should().Be(2);
-        (batchSize + newBatchThreshold).Should().BeLessThanOrEqualTo(
-            new ReviewOptions().MaxConcurrentModelRequests, "a review that waits for a model slot holds its diff in memory for nothing");
+        (2 * (batchSize + newBatchThreshold)).Should().BeLessThanOrEqualTo(new ReviewOptions().MaxConcurrentModelRequests, "each review holds two model slots");
     }
 
     [Fact]

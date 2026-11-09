@@ -117,15 +117,24 @@ internal sealed class FakeBackend : HttpMessageHandler
         .Where(call => call.Method == HttpMethod.Post && call.Path == $"/repos/{Owner}/{Repo}/check-runs")
         .ToList();
 
-    public static string PullRequestJson(string headSha = HeadSha, string state = "open", bool isDraft = false, int changedFiles = 2, int additions = 6, int deletions = 5)
+    public static string PullRequestJson(
+        string headSha = HeadSha,
+        string state = "open",
+        bool isDraft = false,
+        int changedFiles = 2,
+        int additions = 6,
+        int deletions = 5,
+        string body = "Retries the call once.")
     {
         return JsonSerializer.Serialize(new
         {
             state,
             draft = isDraft,
             title = "Add retries",
-            head = new { sha = headSha },
-            @base = new { sha = BaseSha },
+            body,
+            user = new { login = "octocat", type = "User" },
+            head = new { sha = headSha, @ref = "feature/retries" },
+            @base = new { sha = BaseSha, @ref = "main" },
             changed_files = changedFiles,
             additions,
             deletions
@@ -145,10 +154,24 @@ internal sealed class FakeBackend : HttpMessageHandler
         }));
     }
 
+    /// <summary>A checklist answer: every check passes but Functionality, a concern, with one finding on <c>src/Foo.cs</c> line 11.</summary>
     public static HttpResponseMessage DefaultModelReply()
     {
-        var review = AnthropicFixtures.ReviewJson("Adds retries.", [AnthropicFixtures.Finding(path: "src/Foo.cs", line: 11)]);
-        return AnthropicFixtures.Message([AnthropicFixtures.TextBlock(review)]);
+        var answer = AnthropicFixtures.ChecklistJson(
+            "Adds retries.",
+            [
+                AnthropicFixtures.Check("standards-design"),
+                AnthropicFixtures.Check("functionality", "concern", "Retries twice."),
+                AnthropicFixtures.Check("performance"),
+                AnthropicFixtures.Check("security"),
+                AnthropicFixtures.Check("testing"),
+                AnthropicFixtures.Check("error-handling"),
+                AnthropicFixtures.Check("scalability"),
+                AnthropicFixtures.Check("dependencies")
+            ],
+            [AnthropicFixtures.ChecklistFinding(file: "src/Foo.cs", line: 11)]);
+
+        return AnthropicFixtures.Message([AnthropicFixtures.TextBlock(answer)]);
     }
 
     public static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK)
