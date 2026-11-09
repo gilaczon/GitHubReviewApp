@@ -293,9 +293,9 @@ If you make `MoneyMe AI review` a required check in a ruleset or branch protecti
 ## 10. Azure App Configuration
 
 App Configuration is optional. It lets you switch reviews off and change the two model ids while the app runs, without a deployment. With no
-`AppConfigurationConnectionString` secret, the app does not use it, logs that the values in `appsettings.json` are in use, and those apply
-for the life of the process. A Function App application setting cannot change them either (the file wins, section 4): without the store, the
-ways to stop reviews are stopping the function app or deploying a changed `appsettings.json`.
+`AppConfigurationConnectionString` secret, the app does not use it, logs that the runtime defaults (or the `Runtime__*` application
+settings) are in use, and those apply for the life of the process. Without the store, stop reviews with the application setting
+`Runtime__IsReviewEnabled=false` (section 4): saving it restarts the function app.
 
 The app reads the store through its read-only access-key connection string, which is kept in Key Vault as `AppConfigurationConnectionString`
 and loaded like every other secret. The read-write keys stay with the owners of the store's configuration: the app never needs them. Do not
