@@ -1,5 +1,5 @@
-// Whether App Configuration was added, for the startup diagnostics. Set while the services are configured.
-var isAppConfigurationAdded = false;
+// What was done about App Configuration, for the startup diagnostics. Set while the services are configured.
+var appConfigurationOutcome = AppConfigurationOutcome.NotConfigured;
 
 var host = new HostBuilder()
     // App Configuration refreshes only when something asks it to; in an isolated worker, that is this middleware.
@@ -20,7 +20,7 @@ var host = new HostBuilder()
         configManager!.AddSecretsToConfiguration(services, context.HostingEnvironment.EnvironmentName);
 
         // The model ids and the on/off switch can be changed at runtime. This reads the connection string, so it comes after the secrets.
-        isAppConfigurationAdded = configManager!.AddRuntimeAppConfiguration(services, context.HostingEnvironment);
+        appConfigurationOutcome = configManager!.AddRuntimeAppConfiguration(services, context.HostingEnvironment);
 
         // Settings, GitHub and Claude clients, and the review pipeline. Development uses a fake model.
         services.AddReviewPipeline(context.Configuration, isClaudeMocked: context.HostingEnvironment.IsDevelopment());
@@ -37,7 +37,7 @@ StartupDiagnostics.LogTelemetryState(
 
 StartupDiagnostics.LogRuntimeSettingsSource(
     host.Services.GetRequiredService<ILogger<Program>>(),
-    isAppConfigurationAdded);
+    appConfigurationOutcome);
 
 StartupDiagnostics.LogAuthorAllowList(
     host.Services.GetRequiredService<ILogger<Program>>(),

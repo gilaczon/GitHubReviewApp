@@ -129,7 +129,7 @@ public class RuntimeSettingsMonitorTests
 
     [Theory]
     [MemberData(nameof(InvalidModelIds))]
-    public void Current_GivenAReloadWithAnInvalidModelId_Should_KeepTheLastGoodSnapshotAndWarn(string invalidModelId)
+    public void Current_GivenAReloadWithAnInvalidModelId_Should_KeepTheLastGoodModelIdApplyTheOtherValuesAndWarn(string invalidModelId)
     {
         // Arrange
         var configuration = ValidConfiguration();
@@ -143,7 +143,7 @@ public class RuntimeSettingsMonitorTests
         configuration.Root.Reload();
 
         // Assert
-        sut.Current.Should().BeSameAs(lastGood);
+        sut.Current.Should().Be(lastGood with { IsReviewEnabled = false });
         var warning = logger.Entries.Should().ContainSingle().Subject;
         warning.Level.Should().Be(LogLevel.Warning);
         warning.Message.Should().Contain("Runtime:SonnetModel");
@@ -183,7 +183,7 @@ public class RuntimeSettingsMonitorTests
     }
 
     [Fact]
-    public void Current_GivenAReloadWithASwitchThatIsNotABoolean_Should_KeepTheLastGoodSnapshotAndWarn()
+    public void Current_GivenAReloadWithASwitchThatIsNotABoolean_Should_KeepTheLastGoodSwitchApplyTheModelIdsAndWarn()
     {
         // Arrange
         const string notABoolean = "maybe-later";
@@ -198,7 +198,7 @@ public class RuntimeSettingsMonitorTests
         configuration.Root.Reload();
 
         // Assert
-        sut.Current.Should().BeSameAs(lastGood);
+        sut.Current.Should().Be(lastGood with { OpusModel = "claude-opus-10" });
         var warning = logger.Entries.Should().ContainSingle().Subject;
         warning.Level.Should().Be(LogLevel.Warning);
         warning.Message.Should().Contain("Runtime:IsReviewEnabled").And.NotContain(notABoolean);
@@ -222,7 +222,7 @@ public class RuntimeSettingsMonitorTests
     }
 
     [Fact]
-    public void Current_GivenAnInvalidValueAtStartup_Should_UseTheDefaultsAndWarn()
+    public void Current_GivenAnInvalidModelIdAtStartup_Should_UseThatKeysDefaultApplyTheOtherValuesAndWarn()
     {
         // Arrange
         var configuration = ConfigurationWith(
@@ -235,8 +235,75 @@ public class RuntimeSettingsMonitorTests
         using var sut = new RuntimeSettingsMonitor(configuration.Root, logger);
 
         // Assert
-        sut.Current.Should().Be(RuntimeSettings.Default);
+        sut.Current.Should().Be(new RuntimeSettings(false, RuntimeSettings.Default.SonnetModel, ValidOpusModel));
         logger.Entries.Should().ContainSingle().Which.Level.Should().Be(LogLevel.Warning);
+    }
+
+    [Fact]
+    public void Current_GivenTheSwitchOffAndAnInvalidModelIdAtStartup_Should_SwitchReviewsOff()
+    {
+        // Arrange
+        var configuration = ConfigurationWith(
+            ("Runtime:IsReviewEnabled", "false"),
+            ("Runtime:SonnetModel", "gpt-4"));
+
+        // Act
+        using var sut = new RuntimeSettingsMonitor(configuration.Root, NullLogger<RuntimeSettingsMonitor>.Instance);
+
+        // Assert
+        sut.Current.IsReviewEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Current_GivenAStaleInvalidModelIdAndTheSwitchTurnedOff_Should_SwitchReviewsOff()
+    {
+        // Arrange
+        var configuration = ValidConfiguration();
+        using var sut = new RuntimeSettingsMonitor(configuration.Root, NullLogger<RuntimeSettingsMonitor>.Instance);
+        configuration.Change("Runtime:OpusModel", "gpt-4");
+        configuration.Root.Reload();
+        configuration.Change("Runtime:IsReviewEnabled", "false");
+
+        // Act
+        configuration.Root.Reload();
+
+        // Assert
+        sut.Current.Should().Be(new RuntimeSettings(false, ValidSonnetModel, ValidOpusModel));
+    }
+
+    [Fact]
+    public void Current_GivenAnInvalidSwitchAndAValidModelIdAtStartup_Should_KeepTheSwitchDefaultAndApplyTheModelId()
+    {
+        // Arrange
+        var configuration = ConfigurationWith(
+            ("Runtime:IsReviewEnabled", "maybe-later"),
+            ("Runtime:SonnetModel", ValidSonnetModel));
+
+        // Act
+        using var sut = new RuntimeSettingsMonitor(configuration.Root, NullLogger<RuntimeSettingsMonitor>.Instance);
+
+        // Assert
+        sut.Current.Should().Be(RuntimeSettings.Default with { SonnetModel = ValidSonnetModel });
+    }
+
+    [Fact]
+    public void Current_GivenAReloadWithEveryValueInvalid_Should_KeepTheSameSnapshotAndWarnForEachKey()
+    {
+        // Arrange
+        var configuration = ValidConfiguration();
+        var logger = new ListLogger<RuntimeSettingsMonitor>();
+        using var sut = new RuntimeSettingsMonitor(configuration.Root, logger);
+        var lastGood = sut.Current;
+        configuration.Change("Runtime:IsReviewEnabled", "maybe-later");
+        configuration.Change("Runtime:SonnetModel", "gpt-4");
+        configuration.Change("Runtime:OpusModel", "gpt-4");
+
+        // Act
+        configuration.Root.Reload();
+
+        // Assert
+        sut.Current.Should().BeSameAs(lastGood);
+        logger.Entries.Should().HaveCount(3);
     }
 
     [Fact]

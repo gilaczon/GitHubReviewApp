@@ -56,21 +56,32 @@ internal static class StartupDiagnostics
     }
 
     /// <summary>
-    /// Says where the runtime settings (whether reviews are on, and the two model ids) come from. Without the App Configuration connection string
-    /// the values in appsettings.json are the ones in use for the life of the process. Neither the string nor any value is written.
+    /// Says where the runtime settings (whether reviews are on, and the two model ids) come from. Without the App Configuration connection string,
+    /// or with one that is not well formed, the values in appsettings.json are the ones in use for the life of the process. With a store, they apply
+    /// until the store has been read, which waits at most <see cref="AppConfigurationSetup.StartupTimeout"/> at startup. Neither the string nor any
+    /// value is written.
     /// </summary>
-    internal static void LogRuntimeSettingsSource(ILogger logger, bool isAppConfigurationAdded)
+    internal static void LogRuntimeSettingsSource(ILogger logger, AppConfigurationOutcome outcome)
     {
-        if (isAppConfigurationAdded)
+        switch (outcome)
         {
-            logger.LogInformation(
-                "Azure App Configuration is on: the {Filter} keys in the store override the Runtime values in appsettings.json, and a change is picked up when the {Sentinel} key changes.",
-                AppConfigurationSetup.RuntimeKeyFilter, AppConfigurationSetup.SentinelKey);
-            return;
-        }
+            case AppConfigurationOutcome.Added:
+                logger.LogInformation(
+                    "Azure App Configuration is on: the {Filter} keys in the store replace the Runtime values in appsettings.json once the store has been read, and a change is picked up when the {Sentinel} key changes. The startup wait for the store is at most {TimeoutSeconds} seconds; until it has been read, and while it cannot be reached, the appsettings.json values apply.",
+                    AppConfigurationSetup.RuntimeKeyFilter, AppConfigurationSetup.SentinelKey, AppConfigurationSetup.StartupTimeout.TotalSeconds);
+                break;
 
-        logger.LogInformation(
-            "No {SecretName} is set, so Azure App Configuration is not used and the Runtime values in appsettings.json apply.",
-            AppConfigurationSetup.ConnectionStringSecretName);
+            case AppConfigurationOutcome.Invalid:
+                logger.LogWarning(
+                    "{SecretName} is set but is not a well-formed connection string (Endpoint=<https URI>;Id=<id>;Secret=<base64>), so Azure App Configuration is not used and the Runtime values in appsettings.json apply.",
+                    AppConfigurationSetup.ConnectionStringSecretName);
+                break;
+
+            default:
+                logger.LogInformation(
+                    "No {SecretName} is set, so Azure App Configuration is not used and the Runtime values in appsettings.json apply.",
+                    AppConfigurationSetup.ConnectionStringSecretName);
+                break;
+        }
     }
 }

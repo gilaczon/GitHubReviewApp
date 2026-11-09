@@ -3,8 +3,9 @@ namespace GitHubReviewApp.Configuration;
 /// <summary>
 /// Holds the runtime settings (design 5.11) and follows the configuration as it reloads. It is not <c>IOptionsMonitor</c> with validation, because
 /// that keeps no last good value: an invalid value on a reload would make every later read throw. Here every reload is parsed and validated into
-/// an immutable snapshot that replaces the current one only when all three values are valid. Otherwise the last good snapshot stays (at startup,
-/// the defaults) and a warning names the key. A value is never written to the log.
+/// an immutable snapshot, and each key is judged on its own: a valid value is applied, a missing key takes its default, and an invalid value keeps
+/// that key's last good value (at startup, its default) with a warning that names the key. One bad key therefore never holds back another, so a
+/// valid switch turning reviews off is never blocked by a model id. A value is never written to the log.
 /// </summary>
 public sealed class RuntimeSettingsMonitor : IRuntimeSettings, IDisposable
 {
@@ -45,14 +46,16 @@ public sealed class RuntimeSettingsMonitor : IRuntimeSettings, IDisposable
         {
             var section = _configuration.GetSection(SectionName);
             var defaults = RuntimeSettings.Default;
+            var lastGood = Current;
 
-            var isSwitchValid = TryReadSwitch(section, nameof(RuntimeSettings.IsReviewEnabled), defaults.IsReviewEnabled, out var isReviewEnabled);
-            var isSonnetModelValid = TryReadModelId(section, nameof(RuntimeSettings.SonnetModel), defaults.SonnetModel, out var sonnetModel);
-            var isOpusModelValid = TryReadModelId(section, nameof(RuntimeSettings.OpusModel), defaults.OpusModel, out var opusModel);
+            var snapshot = new RuntimeSettings(
+                ReadSwitch(section, nameof(RuntimeSettings.IsReviewEnabled), defaults.IsReviewEnabled, lastGood.IsReviewEnabled),
+                ReadModelId(section, nameof(RuntimeSettings.SonnetModel), defaults.SonnetModel, lastGood.SonnetModel),
+                ReadModelId(section, nameof(RuntimeSettings.OpusModel), defaults.OpusModel, lastGood.OpusModel));
 
-            if (isSwitchValid && isSonnetModelValid && isOpusModelValid)
+            if (snapshot != lastGood)
             {
-                Volatile.Write(ref _current, new RuntimeSettings(isReviewEnabled, sonnetModel, opusModel));
+                Volatile.Write(ref _current, snapshot);
             }
         }
         catch (Exception exception)
@@ -64,50 +67,46 @@ public sealed class RuntimeSettingsMonitor : IRuntimeSettings, IDisposable
         }
     }
 
-    private bool TryReadSwitch(IConfigurationSection section, string key, bool isDefaultEnabled, out bool isEnabled)
+    private bool ReadSwitch(IConfigurationSection section, string key, bool isDefaultEnabled, bool isLastGoodEnabled)
     {
         var text = section[key];
 
         if (text is null)
         {
-            isEnabled = isDefaultEnabled;
-            return true;
+            return isDefaultEnabled;
         }
 
-        if (bool.TryParse(text, out isEnabled))
+        if (bool.TryParse(text, out var isEnabled))
         {
-            return true;
+            return isEnabled;
         }
 
         WarnInvalid(key, "true or false");
-        return false;
+        return isLastGoodEnabled;
     }
 
-    private bool TryReadModelId(IConfigurationSection section, string key, string defaultValue, out string modelId)
+    private string ReadModelId(IConfigurationSection section, string key, string defaultValue, string lastGoodValue)
     {
         var text = section[key];
 
         if (text is null)
         {
-            modelId = defaultValue;
-            return true;
+            return defaultValue;
         }
-
-        modelId = text;
 
         if (text.Length <= MaxModelIdLength && _modelIdPattern.IsMatch(text))
         {
-            return true;
+            return text;
         }
 
         WarnInvalid(key, $"a model id such as claude-sonnet-5-5 (lowercase letters, digits, dots and hyphens, at most {MaxModelIdLength} characters)");
-        return false;
+        return lastGoodValue;
     }
 
     private void WarnInvalid(string key, string expected)
     {
         _logger.LogWarning(
-            "Ignoring the runtime settings: {SectionName}:{Key} is not valid, it must be {Expected}. The last good values stay in use.",
+            "Ignoring {SectionName}:{Key}: it is not valid, it must be {Expected}. The last good value of this key stays in use.",
             SectionName, key, expected);
     }
 }

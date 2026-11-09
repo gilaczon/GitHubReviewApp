@@ -141,7 +141,7 @@ public class StartupDiagnosticsTests
         var logger = new ListLogger<StartupDiagnosticsTests>();
 
         // Act
-        StartupDiagnostics.LogRuntimeSettingsSource(logger, isAppConfigurationAdded: false);
+        StartupDiagnostics.LogRuntimeSettingsSource(logger, AppConfigurationOutcome.NotConfigured);
 
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;
@@ -150,17 +150,34 @@ public class StartupDiagnosticsTests
     }
 
     [Fact]
-    public void LogRuntimeSettingsSource_GivenAppConfiguration_Should_SayTheStoreOverridesTheAppSettingsValues()
+    public void LogRuntimeSettingsSource_GivenAppConfiguration_Should_SayTheStoreAppliesOnceReadAndTheAppSettingsValuesUntilThen()
     {
         // Arrange
         var logger = new ListLogger<StartupDiagnosticsTests>();
 
         // Act
-        StartupDiagnostics.LogRuntimeSettingsSource(logger, isAppConfigurationAdded: true);
+        StartupDiagnostics.LogRuntimeSettingsSource(logger, AppConfigurationOutcome.Added);
 
         // Assert
         var entry = logger.Entries.Should().ContainSingle().Subject;
         entry.Level.Should().Be(LogLevel.Information);
-        entry.Message.Should().Contain("App Configuration").And.Contain("GitHubReviewApp:Runtime");
+        entry.Message.Should().Contain("App Configuration").And.Contain("GitHubReviewApp:Runtime")
+            .And.Contain("once the store has been read").And.Contain("appsettings.json values apply")
+            .And.NotContain("override");
+    }
+
+    [Fact]
+    public void LogRuntimeSettingsSource_GivenAMalformedConnectionString_Should_WarnNamingTheSecretAndSayTheAppSettingsValuesApply()
+    {
+        // Arrange
+        var logger = new ListLogger<StartupDiagnosticsTests>();
+
+        // Act
+        StartupDiagnostics.LogRuntimeSettingsSource(logger, AppConfigurationOutcome.Invalid);
+
+        // Assert
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Warning);
+        entry.Message.Should().Contain("AppConfigurationConnectionString").And.Contain("not a well-formed").And.Contain("appsettings.json");
     }
 }
