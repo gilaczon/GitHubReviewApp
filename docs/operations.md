@@ -249,8 +249,9 @@ after the deployment, and until each installation owner has approved it, reviews
 approved, the app uses it from the next token it fetches (a token is cached until shortly before it expires, so allow up to an hour).
 
 The webhook needs the **Pull request** event, as before. The app answers 202 for a `pull_request` event of the four actions it reviews
-(`opened`, `reopened`, `synchronize`, `ready_for_review`) on a pull request that is not a draft, from an author the allow-list accepts, while
-reviews are switched on (section 4; otherwise `200 Ignored: reviews are switched off.`).
+(`opened`, `reopened`, `synchronize`, `ready_for_review`), or an `edited` event that changed the base branch, on a pull request that is not a
+draft, into a branch in `Review:TargetBranches`, from an author the allow-list accepts, while reviews are switched on (section 4; otherwise
+`200 Ignored: reviews are switched off.`).
 
 ## 9. The check run
 
@@ -322,13 +323,13 @@ after that one. A review that is running keeps the model it started with.
 
 Last-known-good behaviour:
 
-- At startup the app waits at most three seconds for the store. If the store cannot be reached, the app starts on the values in
-  `appsettings.json`, and the refresh picks the store up when it is reachable again. A cold start is therefore never held for long by an
+- At startup the app waits at most three seconds for the store. If the store cannot be reached, the app starts on the runtime defaults
+  (or the `Runtime__*` application settings), and the refresh picks the store up when it is reachable again. A cold start is therefore never held for long by an
   outage. The package logs "A refresh operation failed." for each refresh that fails.
 - When a refresh fails, the values already read stay in use.
-- A key that is missing from the store takes its default from `appsettings.json`. A key with an invalid value keeps its last good value, with
+- A key that is missing from the store takes its runtime default (or its `Runtime__*` application setting). A key with an invalid value keeps its last good value, with
   a warning that names the key (section 4). The other keys are not held back by it.
-- A connection string that is not well formed is not used at all: the app still starts, the `appsettings.json` values apply, and a warning
+- A connection string that is not well formed is not used at all: the app still starts, the runtime defaults apply, and a warning
   names the secret, never its value.
 
 Switching reviews off is the fast way to stop spending: set `GitHubReviewApp:Runtime:IsReviewEnabled` to `false` and change the sentinel.
